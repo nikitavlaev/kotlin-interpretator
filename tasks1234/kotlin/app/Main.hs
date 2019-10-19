@@ -1,6 +1,7 @@
 module Main where
 
-import Text.Parsec
+import Text.Parsec hiding (spaces)
+import Data.Functor.Identity
 
 data Expr = NOP
     | Jmp {currentExpr :: Expr, nextExpr :: Expr}
@@ -8,12 +9,10 @@ data Expr = NOP
     | VarInit {name :: String, ktype :: KType}
     | VarGet {name :: String}
     | VarSet {name :: String, value :: Expr}
-    | VarGetIndex {name :: String, index :: Expr}
-    | VarSetIndex {name :: String, index :: Expr, value :: Expr}
     | Val KData
     | BeginFunction {name :: String}
     | EndFunction
-    | GenerateException
+    | RuntimeException
     | Read
     | Write {message :: Expr}
     | Add Expr Expr
@@ -61,8 +60,36 @@ data ParserState = ParserState {labels :: [Label], objects :: [Object], function
 
 type Parser = Parsec String ParserState
 
-parserTest :: Parser a -> String -> Either ParseError a
-parserTest parser input = runParser parser (ParserState [] [] [] []) "" input
+parserTest :: Parser Expr -> String -> Either ParseError Expr
+parserTest parser input = takeExpr 5 $ runParser parser (ParserState [] [] [] []) "" input
+
+takeExpr :: Int -> Either ParseError Expr -> Either ParseError Expr
+takeExpr _ (Left error) = Left error
+takeExpr n (Right expr) = Right $ showExpr n expr where
+    showExpr 0 _ = Read
+    showExpr n (Jmp ce ne) = Jmp (showExpr (n - 1) ce) (showExpr (n - 1) ne)
+    showExpr n (JmpIf c te fe) = JmpIf (showExpr (n - 1) c) (showExpr (n - 1) te) (showExpr (n - 1) fe)
+    showExpr n (Val d) = Val d
+    showExpr n NOP = NOP
+    showExpr n (Add l r) = Add (showExpr (n - 1) l) (showExpr (n - 1) r)
+    showExpr n (Sub l r) = Sub (showExpr (n - 1) l) (showExpr (n - 1) r)
+    showExpr n (Mul l r) = Mul (showExpr (n - 1) l) (showExpr (n - 1) r)
+    showExpr n (Div l r) = Div (showExpr (n - 1) l) (showExpr (n - 1) r)
+    showExpr n (Mod l r) = Mod (showExpr (n - 1) l) (showExpr (n - 1) r)
+    showExpr n (Or l r) = Or (showExpr (n - 1) l) (showExpr (n - 1) r)
+    showExpr n (And l r) = And (showExpr (n - 1) l) (showExpr (n - 1) r)
+    showExpr n (Less l r) = Less (showExpr (n - 1) l) (showExpr (n - 1) r)
+    showExpr n (Equal l r) = Equal (showExpr (n - 1) l) (showExpr (n - 1) r)
+    showExpr n (Not e) = Not (showExpr (n - 1) e)
+
+spaces :: Parser ()
+spaces = skipMany $ char ' '
+
+separator :: Parser ()
+separator = spaces *> (newline <|> pure ' ') *> spaces
+
+semicolon :: Parser ()
+semicolon = spaces *> (char ';' *> separator <|> newline *> spaces)
 
 parseInt :: Parser Expr
 parseInt = (Val . KDInt . read) <$> try ((++) <$> (string "-" <* spaces <|> pure "") <*> many1 digit)
@@ -77,7 +104,7 @@ parseChar :: Parser Expr
 parseChar = (Val . KDChar) <$> between (char '\'') (char '\'') (satisfy (/= '\\') <|> char '\\' *> (oneOf ['"', '\''] <|> do {char 'n'; return '\n'}))
 
 parseBool :: Parser Expr
-parseBool = do { try $ string "true"; return $ Val $ KDBool True } <|> do { try $ string "false"; return $ Val $ KDBool False }
+parseBool = do { string "true"; return $ Val $ KDBool True } <|> do { string "false"; return $ Val $ KDBool False }
 
 parseNull :: Parser Expr
 parseNull = do { try $ string "null"; return $ Val KDNull }
@@ -116,8 +143,35 @@ parseNot :: Parser Expr
 parseNot = string "!" *> spaces *> (Not <$> parseFunction) <|> parseFunction
 
 parseFunction :: Parser Expr
-parseFunction = parseValue
+parseFunction = parseVariable
+
+parseVariable :: Parser Expr
+parseVariable = parseIf
+
+parseIf :: Parser Expr
+parseIf = try $ JmpIf <$> (string "if" *> spaces *> parseInparens) <* separator <*> parseBlock <*> (separator *> string "else" *> separator *> parseBlock <|> pure NOP) <|> parseValue
+
+parseBlock :: Parser Expr
+parseBlock = char '{' *> separator *> parseManyPrimitives <* separator <* char '}' <|> parseExpr
+
+parseOnePrimitiv :: Parser Expr
+parseOnePrimitiv = parseExpr <|> parseWhile
+
+parseManyPrimitives :: Parser Expr
+parseManyPrimitives = Jmp <$> parseOnePrimitiv <*> (semicolon *> parseManyPrimitives <|> pure NOP)
+
+parseWhile :: Parser Expr
+parseWhile = do
+    string "while"
+    spaces
+    cond <- parseInparens
+    separator
+    body <- parseBlock
+    let loop = JmpIf cond (Jmp body loop) NOP
+    return loop
 
 main :: IO ()
 main = do
-    print "Hello world!"
+    putStrLn "Hello world!"
+    test <- getLine
+    print $ parserTest parseExpr test
