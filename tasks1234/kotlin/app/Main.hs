@@ -182,6 +182,8 @@ module Main where
         | KTAny
         deriving Show
 
+        -- | KTIterable
+
     -- data KTIterable = KTIterable {next :: KData, hasNext :: Bool} 
     -- Вообще hasNеxt это функция, но я чет не знаю как это правильно описать
 
