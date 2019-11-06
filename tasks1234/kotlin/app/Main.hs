@@ -171,8 +171,11 @@ module Main where
     data KType = KTUnit
         | KTBool
         | KTChar
-        | KTNum
-        -- | KTIterable
+        | KTByte
+        | KTShort
+        | KTInt
+        | KTLong
+        | KTDouble
         | KTArray KType
         | KTNullable KType
         | KTUserType String
@@ -181,13 +184,6 @@ module Main where
 
     -- data KTIterable = KTIterable {next :: KData, hasNext :: Bool} 
     -- Вообще hasNеxt это функция, но я чет не знаю как это правильно описать
-
-    data KTNum = KTByte
-        | KTShort
-        | KTInt
-        | KTLong
-        | KTDouble
-        deriving Show
 
     data KData = KDUnit
         | KDNull
@@ -261,6 +257,18 @@ module Main where
     
     parseString :: Parser Expr
     parseString = (Val . KDArray . fmap KDChar) <$> between (char '"') (char '"') (many $ char '\\' *> parseCharAfterLeftSlash <|> satisfy (/= '"'))
+
+    parseRange :: Parser Expr
+    parseRange = try $ parseInt >>= (\(Val (KDInt x)) ->
+        ((string ".." *> parseInt) >>= (\(Val (KDInt y)) ->
+            try ((spaces *> string "step" *> spaces *> parseInt) >>= (\(Val (KDInt z)) ->
+                return $ Val $ KDArray [KDInt z | z <- [x, x + z .. y]])) <|>
+            (return $ Val $ KDArray [KDInt z | z <- [x..y]]))) <|>
+        ((spaces *> string "downTo" *> spaces *> parseInt) >>= (\(Val (KDInt y)) ->
+            try ((spaces *> string "step" *> spaces *> parseInt) >>= (\(Val (KDInt z)) ->
+                return $ Val $ KDArray [KDInt z | z <- [x, x - z .. y]])) <|>
+            (return $ Val $ KDArray [KDInt z | z <- [x, x - 1 .. y]]))
+        ))
     
     parseChar :: Parser Expr
     parseChar = (Val . KDChar) <$> between (char '\'') (char '\'') (char '\\' *> parseCharAfterLeftSlash <|> anyChar)
@@ -278,7 +286,7 @@ module Main where
     parseFunPrimitiv = Expression <$> parseExpr
 
     parseValue :: Parser Expr
-    parseValue = parseDouble <|> parseInt <|> parseString <|> parseChar <|> parseBool <|> parseNull <|> parseUnit <|> parseInparens
+    parseValue = parseRange <|> parseDouble <|> parseInt <|> parseString <|> parseChar <|> parseBool <|> parseNull <|> parseUnit <|> parseInparens
     
     parseInparens :: Parser Expr
     parseInparens = char '(' *> spaces *> parseExpr <* spaces <* char ')'
@@ -363,23 +371,32 @@ module Main where
 
     parseKTypeName :: Parser KType
     parseKTypeName = do {
-        string "Int"
-        return $ KTNum KTInt
+        string "Int";
+        return $ KTInt;
     } <|> do {
-        string "String"
-        return $ KTArray KTChar
+        string "Long";
+        return $ KTLong;
     } <|> do {
-        string "Char"
-        return KTChar
+        string "Byte";
+        return $ KTByte;
     } <|> do {
-        string "Bool"
-        return KTBool
+        string "Short";
+        return $ KTShort;
     } <|> do {
-        string "Unit"
-        return KTUnit
+        string "Double";
+        return $ KTDouble;
     } <|> do {
-        typeName <- parseName
-        return $ KTUserType typeName
+        string "Char";
+        return KTChar;
+    } <|> do {
+        string "Bool";
+        return KTBool;
+    } <|> do {
+        string "Unit";
+        return KTUnit;
+    } <|> do {
+        typeName <- parseName;
+        return $ KTUserType typeName;
     }
 
     parseSimpleKType :: Parser KType
@@ -395,24 +412,24 @@ module Main where
     parseWhile = string "while" *> spaces *> pure While <*> parseInparens <* separator <*> parseBlock
 
     parseVarInit :: Parser FunPrimitiv
-    parseVarInit = string "var " *> spaces *> pure VarInit <*> parseName <* (try (spaces <* string ":" <* spaces <*> parseKType) <|> pure KTAny)
+    parseVarInit = string "var " *> spaces *> pure VarInit <*> parseName <*> (try (spaces *> string ":" *> spaces *> parseKType) <|> pure KTAny)
 
     parseValInit :: Parser FunPrimitiv
-    parseValInit = string "val " *> spaces *> pure ValInit <*> parseName <* (try (spaces <* string ":" <* spaces <*> parseKType) <|> pure KTAny)
+    parseValInit = string "val " *> spaces *> pure ValInit <*> parseName <*> (try (spaces *> string ":" *> spaces *> parseKType) <|> pure KTAny)
 
     parseLabels :: Parser FunPrimitiv
     parseLabels = do {
-        string "break"
-        return Break
+        string "break";
+        return Break;
     } <|> do {
-        string "continue"
-        return Continue
+        string "continue";
+        return Continue;
     } <|> do {
-        string "return "
-        return Continue
-        --spaces
-        --result <- parseIf
-        --return $ Return result
+        string "return ";
+        --return Continue
+        spaces;
+        result <- parseIf;
+        return $ Return result;
     }
 
         --(char '(' *> spaces *> char ')' *> return (CallFun {name = name, fargs = []})))
