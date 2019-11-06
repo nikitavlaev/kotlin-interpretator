@@ -284,14 +284,18 @@ module Main where
     parseUnit :: Parser Expr
     parseUnit = do { try $ string "Unit"; return $ Val KDUnit }
     
-    parseFunPrimitiv :: Parser FunPrimitiv
-    parseFunPrimitiv = Expression <$> parseExpr
+    parseFunPrimitiv :: Parser [FunPrimitiv]
+    parseFunPrimitiv = parseWhile <|>
+        parseVarInit <|>
+        parseValInit <|>
+        parseLabels <|>
+        parseExpr
 
     parseValue :: Parser Expr
     parseValue = parseRange <|> parseDouble <|> parseInt <|> parseString <|> parseChar <|> parseBool <|> parseNull <|> parseUnit <|> parseInparens
     
     parseInparens :: Parser Expr
-    parseInparens = char '(' *> spaces *> parseExpr <* spaces <* char ')'
+    parseInparens = char '(' *> spaces *> parseOr <* spaces <* char ')'
     
     --parseOperator :: (Expr -> Expr -> Expr) -> Parser Expr -> String -> Parser Expr -> Parser Expr
     --parseOperator f p1 op p2 = try $ (f <$> p1 <* spaces <* string op <* spaces <*> p2)
@@ -305,8 +309,8 @@ module Main where
     --parseHalfOperator :: String -> Parser Expr -> Parser Expr
     --parseHalfOperator op p2 = spaces *> string op *> spaces *> p2
 
-    parseExpr :: Parser Expr
-    parseExpr = try parseOr
+    parseExpr :: Parser [FunPrimitiv]
+    parseExpr = ( : []) <$> Expression <$> (try parseOr)
     
     parseOr :: Parser Expr
     parseOr = parseOperator Or parseAnd "||" parseOr
@@ -348,7 +352,9 @@ module Main where
     parseNot = (string "!" *> spaces *> (Not <$> parseIf)) <|> parseIf
 
     parseIf :: Parser Expr
-    parseIf = try (string "if" *> spaces *> pure If <*> parseInparens <* separator <*> parseBlock <*> (try (separator *> string "else" *> separator *> parseBlock) <|> pure [])) <|> parseFunOrVar <|> parseValue
+    parseIf = try (If <$> (string "if" *> spaces *> parseInparens) <* separator <*> parseBlock <*> (try (separator *> string "else" *> separator *> parseBlock) <|> pure [])) <|>
+        parseFunOrVar <|>
+        parseValue
 
     parseName :: Parser String
     parseName = (:) <$> letter <*> many (letter <|> digit <|> char '_')
@@ -362,14 +368,15 @@ module Main where
                 Var fieldName -> Var $ name ++ "." ++ fieldName
             )
         ) <|>
-        try ((spaces *> char '(' *> spaces *> (parseExpr `sepBy` try (spaces *> char ',' <* spaces)) <* spaces <* char ')') >>= (\args ->
+        try ((spaces *> char '(' *> spaces *> (try parseOr `sepBy` try (spaces *> char ',' <* spaces)) <* spaces <* char ')') >>= (\args ->
             return $ CallFun name args)
         ) <|>
         (return $ Var name)
      )
 
     parseBlock :: Parser [FunPrimitiv]
-    parseBlock = try (char '{' *> separator *> sepBy (Expression <$> parseExpr) (try semicolon) <* separator <* char '}') <|> ((( : []) . Expression) <$> parseIf)
+    parseBlock = (concat <$> try (char '{' *> separator *> sepBy parseFunPrimitiv (try semicolon) <* (semicolon <|> separator) <* char '}')) <|>
+        ((( : []) . Expression) <$> parseIf)
 
     parseKTypeName :: Parser KType
     parseKTypeName = do {
@@ -410,28 +417,47 @@ module Main where
     parseKType :: Parser KType
     parseKType = try (string "Array<" *> pure KTArray <*> parseKType <* string ">") <|> parseSimpleKType
 
-    parseWhile :: Parser FunPrimitiv
-    parseWhile = string "while" *> spaces *> pure While <*> parseInparens <* separator <*> parseBlock
+    parseWhile :: Parser [FunPrimitiv]
+    parseWhile = ( : []) <$> (While <$> (string "while" *> spaces *> parseInparens) <* separator <*> parseBlock)
 
-    parseVarInit :: Parser FunPrimitiv
-    parseVarInit = string "var " *> spaces *> pure VarInit <*> parseName <*> (try (spaces *> string ":" *> spaces *> parseKType) <|> pure KTAny)
+    parseVarInit :: Parser [FunPrimitiv]
+    parseVarInit = try (string "var " *> spaces *> parseName) >>= (\varName ->
+        (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny) >>= (\varType ->
+            (try (spaces *> char '=' *> spaces *> parseOr) >>= (\varInitValue ->
+                return $ [VarInit varName varType, Expression (CallFun ".set" [Var varName, varInitValue])]
+             )
+            ) <|>
+            (return $ [VarInit varName varType])
+         )
+     )
+    --parseVarInit = (++) <$>
+    --    (( : []) <$> (VarInit <$> (string "var " *> spaces *> parseName) <*> (try (spaces *> string ":" *> spaces *> parseKType) <|> pure KTAny))) <*>
+    --    (try (spaces *> char '=' *> spaces *> parseExpr) <|> pure [])
 
-    parseValInit :: Parser FunPrimitiv
-    parseValInit = string "val " *> spaces *> pure ValInit <*> parseName <*> (try (spaces *> string ":" *> spaces *> parseKType) <|> pure KTAny)
+    parseValInit :: Parser [FunPrimitiv]
+    parseValInit = try (string "val " *> spaces *> parseName) >>= (\valName ->
+        (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny) >>= (\valType ->
+            (try (spaces *> char '=' *> spaces *> parseOr) >>= (\valInitValue ->
+                return $ [ValInit valName valType, Expression (CallFun ".set" [Var valName, valInitValue])]
+             )
+            ) <|>
+            (return $ [ValInit valName valType])
+         )
+     )
 
-    parseLabels :: Parser FunPrimitiv
+    parseLabels :: Parser [FunPrimitiv]
     parseLabels = do {
         string "break";
-        return Break;
+        return [Break];
     } <|> do {
         string "continue";
-        return Continue;
+        return [Continue];
     } <|> do {
         string "return ";
         --return Continue
         spaces;
         result <- parseIf;
-        return $ Return result;
+        return $ [Return result];
     }
 
         --(char '(' *> spaces *> char ')' *> return (CallFun {name = name, fargs = []})))
@@ -461,5 +487,5 @@ module Main where
     main = do
         putStrLn "Hello world!"
         test <- getLine
-        print $ parserTest parseExpr test
+        parseTest parseExpr test
     
