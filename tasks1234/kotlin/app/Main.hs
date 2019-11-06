@@ -73,6 +73,9 @@ module Main where
     
     separator :: Parser ()
     separator = try $ spaces *> (newline <|> pure ' ') *> spaces
+
+    separators :: Parser ()
+    separators = try $ spaces *> (many (char '\n' <|> char ' ')) *> spaces
     
     semicolon :: Parser ()
     semicolon = try $ spaces *> (char ';' *> separator <|> newline *> spaces)
@@ -215,34 +218,34 @@ module Main where
         ((( : []) . Expression) <$> parseIf)
 
     parseKTypeName :: Parser KType
-    parseKTypeName = do {
+    parseKTypeName = try (do {
         string "Int";
         return $ KTInt
-    } <|> do {
+    }) <|> try (do {
         string "Long";
         return $ KTLong
-    } <|> do {
+    }) <|> try (do {
         string "Byte";
         return $ KTByte
-    } <|> do {
+    }) <|> try (do {
         string "Short";
         return $ KTShort
-    } <|> do {
+    }) <|> try (do {
         string "Double";
         return $ KTDouble
-    } <|> do {
+    }) <|> try (do {
         string "String";
         return $ KTArray KTChar
-    } <|> do {
+    }) <|> try (do {
         string "Char";
         return KTChar
-    } <|> do {
+    }) <|> try (do {
         string "Bool";
         return KTBool
-    } <|> do {
+    }) <|> try (do {
         string "Unit";
         return KTUnit
-    } <|> do {
+    }) <|> do {
         typeName <- parseName;
         return $ KTUserType typeName
     } 
@@ -302,18 +305,31 @@ module Main where
     parseVariableVal = string "val " *> spaces *> (Variable <$> pure False <*> parseName <*> (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny))
 
     parseFunParameters :: Parser [Variable]
-    parseFunParameters = between (char '(') (char ')') ((try separator *> (try parseVariableVal <|> parseVariableVar) <* try separator) `sepBy` try (char ','))
+    parseFunParameters = between (char '(') (char ')') ((separator *> (try parseVariableVal <|> parseVariableVar) <* separator) `sepBy` try (char ','))
 
     parseFun :: Parser Fun 
     parseFun = do {
         string "fun";
         spaces;
-        Fun <$> parseName <*> parseFunParameters <*> (try separator *> char ':' *> try separator *> parseKType <* try separator) <*> parseBlock 
+        Fun <$> parseName <*> parseFunParameters <*> (separator *> char ':' *> separator *> parseKType <* separator) <*> parseBlock 
     }
+
+    removeComments :: String -> Int -> String
+    removeComments (s1:s2:xs) parNum | (s1 == '/' && s2 == '*') = removeComments xs (parNum + 1)
+                                     | (s1 == '*' && s2 == '/' && parNum > 0) = removeComments xs (parNum - 1)
+                                     | (parNum > 0) = removeComments (s2:xs) parNum
+                                     | (parNum == 0) = s1 : removeComments (s2:xs) parNum
+    removeComments (s1:xs) _ = [s1]
+    removeComments [] _ = []
+
+    parseProgram :: Parser [Fun]
+    parseProgram = parseFun `sepBy` separators
+    
 
     main :: IO ()
     main = do
-        putStrLn "Hello world!"
-        test <- getLine
-        parseTest parseExpr test
+        putStrLn "Start"
+        program <- readFile "test_program.kt"
+        parseTest parseProgram $ removeComments program 0
+        
     
