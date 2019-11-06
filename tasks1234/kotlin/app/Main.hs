@@ -171,6 +171,7 @@ module Main where
     data KType = KTUnit
         | KTBool
         | KTChar
+        | KTNum
         | KTByte
         | KTShort
         | KTInt
@@ -186,6 +187,13 @@ module Main where
 
     -- data KTIterable = KTIterable {next :: KData, hasNext :: Bool} 
     -- Вообще hasNеxt это функция, но я чет не знаю как это правильно описать
+
+  {-  data KTNum = KTByte
+        | KTShort
+        | KTInt
+        | KTLong
+        | KTDouble
+        deriving Show -}
 
     data KData = KDUnit
         | KDNull
@@ -211,7 +219,8 @@ module Main where
     
     type Parser = Parsec String ()
 
-    parserTest :: Parser Expr -> String -> Either ParseError Expr
+    -- parserTest :: Parser Expr -> String -> Either ParseError Expr
+    parserTest :: Parser [FunPrimitiv] -> String -> Either ParseError [FunPrimitiv]
     parserTest parser input = runParser parser () "" input
     --parserTest parser input = takeExpr 5 $ runParser parser (ParserState [] [] [] []) "" input
     
@@ -246,7 +255,8 @@ module Main where
     
     sepBy :: Parser a -> Parser b -> Parser [a]
     sepBy mainP sepP = helperSepBy mainP sepP <|> pure [] where
-        helperSepBy mainP sepP = try ((:) <$> mainP <* sepP <*> helperSepBy mainP sepP) <|> ( : []) <$> mainP
+        helperSepBy mainP sepP = try ((:) <$> mainP <* sepP <*> helperSepBy mainP sepP)
+                                 <|> ( : []) <$> mainP
 
     parseCharAfterLeftSlash :: Parser Char
     parseCharAfterLeftSlash = char 'n' *> return '\n' <|> char '\'' *> return '\'' <|> char '"' *> return '"'
@@ -255,34 +265,29 @@ module Main where
     parseInt = (Val . KDInt . read) <$> try ((++) <$> (string "-" <* spaces <|> pure "") <*> many1 digit)
     
     parseDouble :: Parser Expr
-    parseDouble = (Val . KDDouble . read) <$> try ((\a b c d -> a ++ b ++ c ++ d) <$> (string "-" <* spaces <|> pure "") <*> many1 digit <*> string "." <*> many1 digit)
+    parseDouble = (Val . KDDouble . read) <$> 
+                    try ((\a b c d -> a ++ b ++ c ++ d) <$> 
+                        (string "-" <* spaces <|> pure "") <*> many1 digit <*> string "." <*> many1 digit)
     
     parseString :: Parser Expr
     parseString = (Val . KDArray . fmap KDChar) <$> between (char '"') (char '"') (many $ char '\\' *> parseCharAfterLeftSlash <|> satisfy (/= '"'))
-
-    parseRange :: Parser Expr
-    parseRange = try $ parseInt >>= (\(Val (KDInt x)) ->
-        ((string ".." *> parseInt) >>= (\(Val (KDInt y)) ->
-            try ((spaces *> string "step" *> spaces *> parseInt) >>= (\(Val (KDInt z)) ->
-                return $ Val $ KDArray [KDInt z | z <- [x, x + z .. y]])) <|>
-            (return $ Val $ KDArray [KDInt z | z <- [x..y]]))) <|>
-        ((spaces *> string "downTo" *> spaces *> parseInt) >>= (\(Val (KDInt y)) ->
-            try ((spaces *> string "step" *> spaces *> parseInt) >>= (\(Val (KDInt z)) ->
-                return $ Val $ KDArray [KDInt z | z <- [x, x - z .. y]])) <|>
-            (return $ Val $ KDArray [KDInt z | z <- [x, x - 1 .. y]]))
-        ))
     
     parseChar :: Parser Expr
     parseChar = (Val . KDChar) <$> between (char '\'') (char '\'') (char '\\' *> parseCharAfterLeftSlash <|> anyChar)
     
     parseBool :: Parser Expr
-    parseBool = do { string "true"; return $ Val $ KDBool True } <|> do { string "false"; return $ Val $ KDBool False }
+    parseBool = do { string "true"; 
+                     return $ Val $ KDBool True } 
+                <|> do { string "false"; 
+                         return $ Val $ KDBool False }
     
     parseNull :: Parser Expr
-    parseNull = do { try $ string "null"; return $ Val KDNull }
+    parseNull = do { try $ string "null"; 
+                     return $ Val KDNull }
     
     parseUnit :: Parser Expr
-    parseUnit = do { try $ string "Unit"; return $ Val KDUnit }
+    parseUnit = do { try $ string "Unit"; 
+                     return $ Val KDUnit }
     
     parseFunPrimitiv :: Parser [FunPrimitiv]
     parseFunPrimitiv = parseWhile <|>
@@ -292,7 +297,14 @@ module Main where
         parseExpr
 
     parseValue :: Parser Expr
-    parseValue = parseRange <|> parseDouble <|> parseInt <|> parseString <|> parseChar <|> parseBool <|> parseNull <|> parseUnit <|> parseInparens
+    parseValue = try parseBool
+                 <|> try parseDouble 
+                 <|> try parseInt 
+                 <|> try parseString 
+                 <|> try parseChar 
+                 <|> try parseNull 
+                 <|> try parseUnit 
+                 <|> parseInparens
     
     parseInparens :: Parser Expr
     parseInparens = char '(' *> spaces *> parseOr <* spaces <* char ')'
@@ -349,7 +361,7 @@ module Main where
     --parseMulDivMod = parseOperator Mul parseNot "*" parseMulDivMod <|> parseOperator Div parseNot "/" parseMulDivMod <|> parseOperator Mod parseNot "%" parseMulDivMod <|> parseNot
     
     parseNot :: Parser Expr
-    parseNot = (string "!" *> spaces *> (Not <$> parseIf)) <|> parseIf
+    parseNot = try (string "!" *> spaces *> (Not <$> parseIf)) <|> parseIf
 
     parseIf :: Parser Expr
     parseIf = try (If <$> (string "if" *> spaces *> parseInparens) <* separator <*> parseBlock <*> (try (separator *> string "else" *> separator *> parseBlock) <|> pure [])) <|>
@@ -381,41 +393,32 @@ module Main where
     parseKTypeName :: Parser KType
     parseKTypeName = do {
         string "Int";
-        return $ KTInt;
+        return $ KTInt
     } <|> do {
-        string "Long";
-        return $ KTLong;
-    } <|> do {
-        string "Byte";
-        return $ KTByte;
-    } <|> do {
-        string "Short";
-        return $ KTShort;
-    } <|> do {
-        string "Double";
-        return $ KTDouble;
+        string "String";
+        return $ KTArray KTChar
     } <|> do {
         string "Char";
-        return KTChar;
+        return KTChar
     } <|> do {
         string "Bool";
-        return KTBool;
+        return KTBool
     } <|> do {
         string "Unit";
-        return KTUnit;
+        return KTUnit
     } <|> do {
         typeName <- parseName;
-        return $ KTUserType typeName;
-    }
+        return $ KTUserType typeName
+    } 
 
     parseSimpleKType :: Parser KType
     parseSimpleKType = parseKTypeName >>= (\ktype ->
-        char '?' *> return (KTNullable ktype) <|>
+        try (char '?' *> return (KTNullable ktype)) <|>
         return ktype
      )
 
     parseKType :: Parser KType
-    parseKType = try (string "Array<" *> pure KTArray <*> parseKType <* string ">") <|> parseSimpleKType
+    parseKType = try (string "Array<" *> (KTArray <$> parseKType <* string ">")) <|> parseSimpleKType
 
     parseWhile :: Parser [FunPrimitiv]
     parseWhile = ( : []) <$> (While <$> (string "while" *> spaces *> parseInparens) <* separator <*> parseBlock)
@@ -454,13 +457,13 @@ module Main where
         return [Continue];
     } <|> do {
         string "return ";
-        --return Continue
         spaces;
         result <- parseIf;
         return $ [Return result];
     }
 
-        --(char '(' *> spaces *> char ')' *> return (CallFun {name = name, fargs = []})))
+    parseFun :: Parser Fun 
+    --(char '(' *> spaces *> char ')' *> return (CallFun {name = name, fargs = []})))
 
     --parseIf = try $ JmpIf <$> (string "if" *> spaces *> parseInparens) <* separator <*> parseBlock <*> (separator *> string "else" *> separator *> parseBlock <|> pure NOP) <|> parseValue
     
@@ -472,16 +475,6 @@ module Main where
     
     parseManyPrimitives :: Parser Expr
     parseManyPrimitives = Jmp <$> parseOnePrimitiv <*> (semicolon *> parseManyPrimitives <|> pure NOP)
-    
-    parseWhile :: Parser Expr
-    parseWhile = do
-        string "while"
-        spaces
-        cond <- parseInparens
-        separator
-        body <- parseBlock
-        let loop = JmpIf cond (Jmp body loop) NOP
-        return loop
     -}
     main :: IO ()
     main = do
