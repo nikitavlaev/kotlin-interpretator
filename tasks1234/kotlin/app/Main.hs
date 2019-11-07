@@ -207,7 +207,7 @@ module Main where
         try ((spaces *> char '(' *> spaces *> (try parseOr `sepBy` try (spaces *> char ',' <* spaces)) <* spaces <* char ')') >>= (\args ->
             return $ CallFun name args)
         ) <|>
-        (return $ Var name)
+        (return $ CallFun ".get" [Var name])
      )
 
     parseBlock :: Parser [FunPrimitiv]
@@ -291,7 +291,7 @@ module Main where
     } <|> do {
         string "return ";
         spaces;
-        result <- parseIf;
+        result <- parseOr;
         return $ [Return result];
     }
 
@@ -302,13 +302,15 @@ module Main where
     parseVariableVal = string "val " *> spaces *> (Variable <$> pure False <*> parseName <*> (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny))
 
     parseFunParameters :: Parser [Variable]
-    parseFunParameters = between (char '(') (char ')') ((try separator *> (try parseVariableVal <|> parseVariableVar) <* try separator) `sepBy` try (char ','))
+    parseFunParameters = between (char '(') (char ')') ((separator *> (try parseVariableVal <|> parseVariableVar) <* separator) `sepBy` try (char ','))
 
     parseFun :: Parser Fun 
     parseFun = do {
         string "fun";
         spaces;
-        Fun <$> parseName <*> parseFunParameters <*> (try separator *> char ':' *> try separator *> parseKType <* try separator) <*> parseBlock 
+        Fun <$> (spaces *> parseName) <* spaces <*> parseFunParameters <* spaces <*>
+            (try (char ':' *> spaces *> parseKType <* spaces) <|> (return KTUnit)) <*>
+            (try parseBlock <|> (char '=' *> separator *> parseExpr))
     }
 
     main :: IO ()
