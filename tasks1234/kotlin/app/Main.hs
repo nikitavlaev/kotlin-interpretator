@@ -20,6 +20,8 @@ module Main where
         | Break
         | Continue
         | Return {result :: Expr}
+        | Assignment {lValue :: Expr, rValue :: Expr}
+        | Throw {exception :: Exception}
         deriving Show
 
     data Expr =
@@ -65,6 +67,8 @@ module Main where
         deriving Show
     
     data Variable = Variable {varMutable :: Bool, varName :: String, varType :: KType} deriving Show
+
+    data Exception = Exception {excMessage :: String} deriving Show
     
     type Parser = Parsec String ()
 
@@ -80,6 +84,7 @@ module Main where
     semicolon :: Parser ()
     semicolon = try $ spaces *> (char ';' *> separator <|> newline *> spaces)
     
+    --none of default sepBy variants implement this functionality
     sepBy :: Parser a -> Parser b -> Parser [a]
     sepBy mainP sepP = helperSepBy mainP sepP <|> pure [] where
         helperSepBy mainP sepP = try ((:) <$> mainP <* sepP <*> helperSepBy mainP sepP)
@@ -129,11 +134,28 @@ module Main where
                      return $ Val KDUnit }
     
     parseFunPrimitiv :: Parser [FunPrimitiv]
-    parseFunPrimitiv = parseWhile <|>
-        parseVarInit <|>
-        parseValInit <|>
-        parseLabels <|>
-        parseExpr
+    parseFunPrimitiv = try parseWhile 
+                    <|> try parseVarInit 
+                    <|> try parseValInit 
+                    <|> try parseLabels 
+                    <|> try parseAssignment 
+                    <|> try parseThrow
+                    <|> parseExpr
+
+    parseThrow :: Parser [FunPrimitiv]
+    parseThrow = (:[]) <$> 
+                 (Throw <$> 
+                  (string "throw" *>
+                   spaces *>
+                  (Exception <$> parseName)))
+
+    parseAssignment :: Parser [FunPrimitiv]
+    parseAssignment = (:[]) <$> (Assignment <$> 
+                        parseOr <*>
+                        (spaces *>
+                        char '=' *>
+                        spaces *>
+                        parseOr))
 
     parseValue :: Parser Expr
     parseValue = try parseRange
