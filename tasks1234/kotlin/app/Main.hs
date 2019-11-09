@@ -20,7 +20,6 @@ module Main where
         | Break
         | Continue
         | Return {result :: Expr}
-        | Assignment {lValue :: Expr, rValue :: Expr}
         | Throw {exception :: Exception}
         deriving Show
 
@@ -137,8 +136,8 @@ module Main where
     parseFunPrimitiv = try parseWhile 
                     <|> try parseVarInit 
                     <|> try parseValInit 
+                    <|> try parseAssignment
                     <|> try parseLabels 
-                    <|> try parseAssignment 
                     <|> try parseThrow
                     <|> parseExpr
 
@@ -150,12 +149,18 @@ module Main where
                   (Exception <$> parseName)))
 
     parseAssignment :: Parser [FunPrimitiv]
-    parseAssignment = (:[]) <$> (Assignment <$> 
-                        parseOr <*>
-                        (spaces *>
-                        char '=' *>
-                        spaces *>
-                        parseOr))
+    parseAssignment = do {
+        lvalue <- parseFunOrVar;
+        index <- (Just <$> try (char '[' *> parseOr <* char ']') <|> pure Nothing);
+        spaces;
+        char '=';
+        spaces;
+        rvalue <- parseOr;
+        return [Expression $ CallFun ".set" (lvalue : rvalue : (case index of
+            Just ind -> [ind]
+            Nothing -> []
+         ))];
+    }
 
     parseValue :: Parser Expr
     parseValue = try parseRange
@@ -334,8 +339,8 @@ module Main where
         string "fun";
         spaces;
         Fun <$> (spaces *> parseName) <* spaces <*> parseFunParameters <* spaces <*>
-            (try (char ':' *> spaces *> parseKType <* spaces) <|> (return KTUnit)) <*>
-            (try parseBlock <|> (char '=' *> separator *> parseExpr))
+            (try (char ':' *> spaces *> parseKType <* separator) <|> return KTUnit <* separator) <*>
+            (try parseBlock <|> char '=' *> separator *> parseExpr)
     }
 
     removeComments :: String -> Int -> String
@@ -353,7 +358,7 @@ module Main where
     main :: IO ()
     main = do
         putStrLn "Start"
-        program <- readFile "test_program.kt"
+        program <- readFile "test/test_program.kt"
         parseTest parseProgram $ removeComments program 0
         
     
