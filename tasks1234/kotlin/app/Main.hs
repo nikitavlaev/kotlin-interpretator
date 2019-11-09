@@ -20,6 +20,8 @@ module Main where
         | Break
         | Continue
         | Return {result :: Expr}
+        | Assignment {lValue :: Expr, rValue :: Expr}
+        | Throw {exception :: Exception}
         deriving Show
 
     data Expr =
@@ -65,6 +67,8 @@ module Main where
         deriving Show
     
     data Variable = Variable {varMutable :: Bool, varName :: String, varType :: KType} deriving Show
+
+    data Exception = Exception {excMessage :: String} deriving Show
     
     type Parser = Parsec String ()
 
@@ -73,10 +77,14 @@ module Main where
     
     separator :: Parser ()
     separator = try $ spaces *> (newline <|> pure ' ') *> spaces
+
+    separators :: Parser ()
+    separators = try $ spaces *> (many (char '\n' <|> char ' ')) *> spaces
     
     semicolon :: Parser ()
     semicolon = try $ spaces *> (char ';' *> separator <|> newline *> spaces)
     
+    --none of default sepBy variants implement this functionality
     sepBy :: Parser a -> Parser b -> Parser [a]
     sepBy mainP sepP = helperSepBy mainP sepP <|> pure [] where
         helperSepBy mainP sepP = try ((:) <$> mainP <* sepP <*> helperSepBy mainP sepP)
@@ -126,11 +134,28 @@ module Main where
                      return $ Val KDUnit }
     
     parseFunPrimitiv :: Parser [FunPrimitiv]
-    parseFunPrimitiv = parseWhile <|>
-        parseVarInit <|>
-        parseValInit <|>
-        parseLabels <|>
-        parseExpr
+    parseFunPrimitiv = try parseWhile 
+                    <|> try parseVarInit 
+                    <|> try parseValInit 
+                    <|> try parseLabels 
+                    <|> try parseAssignment 
+                    <|> try parseThrow
+                    <|> parseExpr
+
+    parseThrow :: Parser [FunPrimitiv]
+    parseThrow = (:[]) <$> 
+                 (Throw <$> 
+                  (string "throw" *>
+                   spaces *>
+                  (Exception <$> parseName)))
+
+    parseAssignment :: Parser [FunPrimitiv]
+    parseAssignment = (:[]) <$> (Assignment <$> 
+                        parseOr <*>
+                        (spaces *>
+                        char '=' *>
+                        spaces *>
+                        parseOr))
 
     parseValue :: Parser Expr
     parseValue = try parseRange
@@ -215,34 +240,34 @@ module Main where
         ((( : []) . Expression) <$> parseIf)
 
     parseKTypeName :: Parser KType
-    parseKTypeName = do {
+    parseKTypeName = try (do {
         string "Int";
         return $ KTInt
-    } <|> do {
+    }) <|> try (do {
         string "Long";
         return $ KTLong
-    } <|> do {
+    }) <|> try (do {
         string "Byte";
         return $ KTByte
-    } <|> do {
+    }) <|> try (do {
         string "Short";
         return $ KTShort
-    } <|> do {
+    }) <|> try (do {
         string "Double";
         return $ KTDouble
-    } <|> do {
+    }) <|> try (do {
         string "String";
         return $ KTArray KTChar
-    } <|> do {
+    }) <|> try (do {
         string "Char";
         return KTChar
-    } <|> do {
+    }) <|> try (do {
         string "Bool";
         return KTBool
-    } <|> do {
+    }) <|> try (do {
         string "Unit";
         return KTUnit
-    } <|> do {
+    }) <|> do {
         typeName <- parseName;
         return $ KTUserType typeName
     } 
@@ -313,9 +338,22 @@ module Main where
             (try parseBlock <|> (char '=' *> separator *> parseExpr))
     }
 
+    removeComments :: String -> Int -> String
+    removeComments (s1:s2:xs) parNum | (s1 == '/' && s2 == '*') = removeComments xs (parNum + 1)
+                                     | (s1 == '*' && s2 == '/' && parNum > 0) = removeComments xs (parNum - 1)
+                                     | (parNum > 0) = removeComments (s2:xs) parNum
+                                     | (parNum == 0) = s1 : removeComments (s2:xs) parNum
+    removeComments (s1:xs) _ = [s1]
+    removeComments [] _ = []
+
+    parseProgram :: Parser [Fun]
+    parseProgram = parseFun `sepBy` separators
+    
+
     main :: IO ()
     main = do
-        putStrLn "Hello world!"
-        test <- getLine
-        parseTest parseExpr test
+        putStrLn "Start"
+        program <- readFile "test_program.kt"
+        parseTest parseProgram $ removeComments program 0
+        
     
