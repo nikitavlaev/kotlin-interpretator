@@ -9,4 +9,5 @@ module Main where
     main = do
         putStrLn "Start"
         program <- readFile "test/test_program.kt"
+        putStrLn $ removeComments program 0
         pPrint $ parse parseProgram "" $ removeComments program 0

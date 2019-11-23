@@ -1,12 +1,6 @@
-fun Foo(val a: Int, var b: String):Int
-{
-    a+b;
-    throw MyException;
-    return a;
+fun Foo() {
+    val t = true ;
+    var b = 2+3 || 5
+    return b ; 
 }
-
-fun Bar(val a: Int, var b: String):String
-{
-    a=b + a;
-    return a;
-}
+/* trouble with true as var, reason - type order */

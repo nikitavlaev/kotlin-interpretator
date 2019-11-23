@@ -2,7 +2,7 @@ module Parsers where
 
     import Ast
     import Data.Functor.Identity
-    import Text.Parsec hiding (spaces, sepBy)
+    import Text.Parsec hiding (spaces)
     import Data.Functor.Identity
  
     type Parser = Parsec String ()
@@ -11,26 +11,26 @@ module Parsers where
     spaces = skipMany $ char ' '
     
     separator :: Parser ()
-    separator = spaces *> (many (char '\n' <|> char ' ')) *> spaces
+    separator = (many (char '\n' <|> char ' ')) *> spaces
     
     semicolon :: Parser ()
     semicolon = spaces *> (char ';' *> separator <|> newline *> spaces)
     
     --none of default sepBy variants implement this functionality
-    sepBy :: Parser a -> Parser b -> Parser [a]
-    sepBy mainP sepP = helperSepBy mainP sepP <|> pure [] where
-        helperSepBy mainP sepP = try ((:) <$> mainP <* sepP <*> helperSepBy mainP sepP)
-                                 <|> ( : []) <$> mainP
+    customSepBy :: Parser a -> Parser b -> Parser [a]
+    customSepBy mainP sepP = helperSepBy mainP sepP <|> pure [] where
+                       helperSepBy mainP sepP = try ((:) <$> mainP <* sepP <*> helperSepBy mainP sepP)
+                                                <|> ( : []) <$> mainP
 
     parseCharAfterLeftSlash :: Parser Char
     parseCharAfterLeftSlash = char 'n' *> return '\n' <|> char '\'' *> return '\'' <|> char '"' *> return '"'
 
     parseInt :: Parser Expr
-    parseInt = (Val . KDInt . read) <$> try ((++) <$> (string "-" <* spaces <|> pure "") <*> many1 digit)
+    parseInt = (Val . KDInt . read) <$> ((++) <$> (string "-" <* spaces <|> pure "") <*> many1 digit)
     
     parseDouble :: Parser Expr
     parseDouble = (Val . KDDouble . read) <$> 
-                    try ((\a b c d -> a ++ b ++ c ++ d) <$> 
+                        ((\a b c d -> a ++ b ++ c ++ d) <$> 
                         (string "-" <* spaces <|> pure "") <*> many1 digit <*> string "." <*> many1 digit)
     
     parseString :: Parser Expr
@@ -110,13 +110,13 @@ module Parsers where
     parseInparens = char '(' *> spaces *> parseOr <* spaces <* char ')'
     
     parseOperator :: (Expr -> Expr -> Expr) -> Parser Expr -> String -> Parser Expr -> Parser Expr
-    parseOperator f p1 op p2 = p1 >>= (\e1 -> parseHalfOperator f e1 op p2 <|> return e1)
+    parseOperator f p1 op p2 = p1 >>= (\e1 -> try (parseHalfOperator f e1 op p2) <|> return e1)
 
     parseHalfOperator :: (Expr -> Expr -> Expr) -> Expr -> String -> Parser Expr -> Parser Expr
-    parseHalfOperator f e1 op p2 = try (spaces *> string op *> spaces *> p2) >>= (\e2 -> return $ f e1 e2)
+    parseHalfOperator f e1 op p2 = (spaces *> string op *> spaces *> p2) >>= (\e2 -> return $ f e1 e2)
 
     parseExpr :: Parser [FunPrimitive]
-    parseExpr = ( : []) <$> Expression <$> (try parseOr)
+    parseExpr = ( : []) <$> Expression <$> parseOr
     
     parseOr :: Parser Expr
     parseOr = parseOperator Or parseAnd "||" parseOr
@@ -126,25 +126,25 @@ module Parsers where
     
     parseEquation :: Parser Expr
     parseEquation = parseAddSub >>= (\e1 ->
-        parseHalfOperator (\x y -> Equal x y) e1 "==" parseAddSub <|>
-        parseHalfOperator (\x y -> Not $ Equal x y) e1 "!=" parseAddSub <|>
-        parseHalfOperator (\x y -> Less x y) e1 "<" parseAddSub <|>
-        parseHalfOperator (\x y -> Less y x) e1 ">" parseAddSub <|>
-        parseHalfOperator (\x y -> Not $ Less y x) e1 "<=" parseAddSub <|>
-        parseHalfOperator (\x y -> Not $ Less x y) e1 ">=" parseAddSub <|>
+        try (parseHalfOperator (\x y -> Equal x y) e1 "==" parseAddSub) <|>
+        try (parseHalfOperator (\x y -> Not $ Equal x y) e1 "!=" parseAddSub) <|>
+        try (parseHalfOperator (\x y -> Less x y) e1 "<" parseAddSub) <|>
+        try (parseHalfOperator (\x y -> Less y x) e1 ">" parseAddSub) <|>
+        try (parseHalfOperator (\x y -> Not $ Less y x) e1 "<=" parseAddSub) <|>
+        try (parseHalfOperator (\x y -> Not $ Less x y) e1 ">=" parseAddSub) <|>
         return e1)
     
     parseAddSub :: Parser Expr
     parseAddSub = parseMulDivMod >>= (\e1 ->
-        parseHalfOperator Add e1 "+" parseAddSub <|>
-        parseHalfOperator Sub e1 "-" parseAddSub <|>
+        try (parseHalfOperator Add e1 "+" parseAddSub) <|>
+        try (parseHalfOperator Sub e1 "-" parseAddSub) <|>
         return e1)
     
     parseMulDivMod :: Parser Expr
     parseMulDivMod = parseNot >>= (\e1 ->
-        parseHalfOperator Mul e1 "*" parseMulDivMod <|>
-        parseHalfOperator Div e1 "/" parseMulDivMod <|>
-        parseHalfOperator Mod e1 "%" parseMulDivMod <|>
+        try (parseHalfOperator Mul e1 "*" parseMulDivMod) <|>
+        try (parseHalfOperator Div e1 "/" parseMulDivMod) <|>
+        try (parseHalfOperator Mod e1 "%" parseMulDivMod) <|>
         return e1)
     
     parseNot :: Parser Expr
@@ -152,8 +152,8 @@ module Parsers where
 
     parseIf :: Parser Expr
     parseIf = try (If <$> (string "if" *> spaces *> parseInparens) <* separator <*> parseBlock <*> (try (separator *> string "else" *> separator *> parseBlock) <|> pure [])) <|>
-        parseFunOrVar <|>
-        parseValue
+              try parseFunOrVar <|>
+              parseValue
 
     parseName :: Parser String
     parseName = (:) <$> letter <*> many (letter <|> digit <|> char '_')
@@ -167,14 +167,14 @@ module Parsers where
                 Var fieldName -> Var $ name ++ "." ++ fieldName
             )
         ) <|>
-        try ((spaces *> char '(' *> spaces *> (try parseOr `sepBy` try (spaces *> char ',' <* spaces)) <* spaces <* char ')') >>= (\args ->
+        try ((spaces *> char '(' *> spaces *> try (parseOr `customSepBy` (spaces *> char ',' <* spaces)) <* spaces <* char ')') >>= (\args ->
             return $ CallFun name args)
         ) <|>
         (return $ CallFun ".get" [Var name])
      )
 
     parseBlock :: Parser [FunPrimitive]
-    parseBlock = (concat <$> try (char '{' *> separator *> sepBy parseFunPrimitive (try semicolon) <* (semicolon <|> separator) <* char '}')) <|>
+    parseBlock = (concat <$> try (char '{' *> separator *> customSepBy parseFunPrimitive semicolon <* (semicolon <|> separator) <* char '}')) <|>
         ((( : []) . Expression) <$> parseIf)
 
     parseKTypeName :: Parser KType
@@ -223,18 +223,18 @@ module Parsers where
     parseWhile = ( : []) <$> (While <$> (string "while" *> spaces *> parseInparens) <* separator <*> parseBlock)
 
     parseVarInit :: Parser [FunPrimitive]
-    parseVarInit = try (string "var " *> spaces *> parseName) >>= (\varName ->
+    parseVarInit = (string "var " *> spaces *> parseName) >>= (\varName ->
         (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny) >>= (\varType ->
-            (try (spaces *> char '=' *> spaces *> parseOr) >>= (\varInitValue ->
+             (try (spaces *> char '=' *> spaces *> parseOr) >>= (\varInitValue ->
                 return $ [VarInit varName varType, Expression (CallFun ".set" [Var varName, varInitValue])]
-             )
-            ) <|>
+             ))
+             <|>
             (return $ [VarInit varName varType])
          )
      )
 
     parseValInit :: Parser [FunPrimitive]
-    parseValInit = try (string "val " *> spaces *> parseName) >>= (\valName ->
+    parseValInit = (string "val " *> spaces *> parseName) >>= (\valName ->
         (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny) >>= (\valType ->
             (try (spaces *> char '=' *> spaces *> parseOr) >>= (\valInitValue ->
                 return $ [ValInit valName valType, Expression (CallFun ".set" [Var valName, valInitValue])]
@@ -265,7 +265,7 @@ module Parsers where
     parseVariableVal = string "val " *> spaces *> (Variable <$> pure False <*> parseName <*> (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny))
 
     parseFunParameters :: Parser [Variable]
-    parseFunParameters = between (char '(') (char ')') ((separator *> (try parseVariableVal <|> parseVariableVar) <* separator) `sepBy` try (char ','))
+    parseFunParameters = between (char '(') (char ')') ((separator *> (try parseVariableVal <|> parseVariableVar) <* separator) `sepBy` (char ','))
 
     parseFun :: Parser Primitive 
     parseFun = do {
@@ -273,7 +273,7 @@ module Parsers where
         spaces;
         Fun <$> (spaces *> parseName) <* spaces <*> parseFunParameters <* spaces <*>
             (try (char ':' *> spaces *> parseKType <* separator) <|> return KTUnit <* separator) <*>
-            (try parseBlock <|> char '=' *> separator *> parseExpr)
+            ((try parseBlock) <|> char '=' *> separator *> parseExpr)
     }
 
     removeComments :: String -> Int -> String
@@ -285,5 +285,5 @@ module Parsers where
     removeComments [] _ = []
 
     parseProgram :: Parser [Primitive]
-    parseProgram = parseFun `sepBy` separator
+    parseProgram = parseFun `endBy` separator
  

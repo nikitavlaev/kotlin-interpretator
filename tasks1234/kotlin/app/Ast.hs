@@ -4,7 +4,7 @@ module Ast where
 
     data Primitive =
           Fun {name :: String, args :: [Variable], returnType :: KType, body :: [FunPrimitive]}
-        | Class {name :: String, fields :: [Variable], functions :: [Primitive]}
+        | Class {name :: String, fields :: [Variable], methods :: [Primitive]}
         deriving Show
 
     data FunPrimitive = 
