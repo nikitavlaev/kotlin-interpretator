@@ -8,13 +8,13 @@ module Parsers where
     type Parser = Parsec String ()
 
     spaces :: Parser ()
-    spaces = try $ skipMany $ char ' '
+    spaces = skipMany $ char ' '
     
     separator :: Parser ()
-    separator = try $ spaces *> (many (char '\n' <|> char ' ')) *> spaces
+    separator = spaces *> (many (char '\n' <|> char ' ')) *> spaces
     
     semicolon :: Parser ()
-    semicolon = try $ spaces *> (char ';' *> separator <|> newline *> spaces)
+    semicolon = spaces *> (char ';' *> separator <|> newline *> spaces)
     
     --none of default sepBy variants implement this functionality
     sepBy :: Parser a -> Parser b -> Parser [a]
