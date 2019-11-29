@@ -1,6 +1,8 @@
-fun Foo() {
-    val t = true ;
-    var b = 2+3 || 5
-    return b ; 
+fun Foo(): Bool {
+    val true1 = true
+    if (t) {
+        var b:Bool=2+3||5
+    }
+    return t
 }
 /* trouble with true as var, reason - type order */

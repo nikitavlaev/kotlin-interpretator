@@ -2,6 +2,7 @@ module Main where
 
     import Ast
     import Parsers
+    import Interpreter
     import Text.Parsec(parse)
     import Text.Pretty.Simple (pPrint)
 

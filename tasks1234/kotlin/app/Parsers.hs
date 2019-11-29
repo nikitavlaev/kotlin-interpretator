@@ -97,7 +97,7 @@ module Parsers where
 
     parseValue :: Parser Expr
     parseValue = try parseRange
-                 <|> try parseBool
+                 -- <|> try parseBool
                  <|> try parseDouble 
                  <|> try parseInt 
                  <|> try parseString 
@@ -152,8 +152,8 @@ module Parsers where
 
     parseIf :: Parser Expr
     parseIf = try (If <$> (string "if" *> spaces *> parseInparens) <* separator <*> parseBlock <*> (try (separator *> string "else" *> separator *> parseBlock) <|> pure [])) <|>
-              try parseValue <|>
-              parseFunOrVar
+              try parseFunOrVar <|>
+              parseValue
 
     parseName :: Parser String
     parseName = (:) <$> letter <*> many (letter <|> digit <|> char '_')
@@ -224,7 +224,7 @@ module Parsers where
 
     parseVarInit :: Parser [FunPrimitive]
     parseVarInit = (string "var " *> spaces *> parseName) >>= (\varName ->
-        (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny) >>= (\varType ->
+        (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTUnknown) >>= (\varType ->
              (try (spaces *> char '=' *> spaces *> parseOr) >>= (\varInitValue ->
                 return $ [VarInit varName varType, Expression (CallFun ".set" [Var varName, varInitValue])]
              ))
@@ -235,7 +235,7 @@ module Parsers where
 
     parseValInit :: Parser [FunPrimitive]
     parseValInit = (string "val " *> spaces *> parseName) >>= (\valName ->
-        (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny) >>= (\valType ->
+        (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTUnknown) >>= (\valType ->
             (try (spaces *> char '=' *> spaces *> parseOr) >>= (\valInitValue ->
                 return $ [ValInit valName valType, Expression (CallFun ".set" [Var valName, valInitValue])]
              )

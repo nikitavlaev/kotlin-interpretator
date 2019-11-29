@@ -49,6 +49,7 @@ module Ast where
         | KTNullable KType
         | KTUserType String
         | KTAny
+        | KTUnknown
         deriving Show
 
     data KData = KDUnit
@@ -59,6 +60,7 @@ module Ast where
         | KDDouble Double
         | KDArray [KData]
         | KDRecord [(String, KData)]
+        | KDUndefined
         deriving Show
     
     data Variable = Variable {varMutable :: Bool, varName :: String, varType :: KType} deriving Show
