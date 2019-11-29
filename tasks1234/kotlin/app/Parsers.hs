@@ -152,8 +152,8 @@ module Parsers where
 
     parseIf :: Parser Expr
     parseIf = try (If <$> (string "if" *> spaces *> parseInparens) <* separator <*> parseBlock <*> (try (separator *> string "else" *> separator *> parseBlock) <|> pure [])) <|>
-              try parseFunOrVar <|>
-              parseValue
+              try parseValue <|>
+              parseFunOrVar
 
     parseName :: Parser String
     parseName = (:) <$> letter <*> many (letter <|> digit <|> char '_')
