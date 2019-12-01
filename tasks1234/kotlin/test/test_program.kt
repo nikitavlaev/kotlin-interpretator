@@ -1,6 +1,11 @@
-fun Foo() {
-    val t = true ;
-    var b = 2+3 || 5
-    return b ; 
+class Class {
+    fun Main()
+    {
+
+    }
+    var a:Int
+    class b {
+        val c : String
+    }
 }
 /* trouble with true as var, reason - type order */
