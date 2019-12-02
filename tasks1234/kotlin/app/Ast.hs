@@ -2,10 +2,10 @@
 
 module Ast where
 
-    data Primitive =
-          Fun {name :: String, args :: [Variable], returnType :: KType, body :: [FunPrimitive]}
-        | Class {name :: String, fields :: [Variable], methods :: [Primitive]}
+    data Class = Class {name :: String, fields :: [Variable], methods :: [Fun], classes :: [Class]}
         deriving Show
+
+    data Fun = Fun {name :: String, args :: [Variable], returnType :: KType, body :: [FunPrimitive]} deriving Show
 
     data FunPrimitive = 
           Expression Expr

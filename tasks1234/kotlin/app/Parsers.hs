@@ -4,6 +4,7 @@ module Parsers where
     import Data.Functor.Identity
     import Text.Parsec hiding (spaces)
     import Data.Functor.Identity
+
  
     type Parser = Parsec String ()
 
@@ -267,7 +268,7 @@ module Parsers where
     parseFunParameters :: Parser [Variable]
     parseFunParameters = between (char '(') (char ')') ((separator *> (try parseVariableVal <|> parseVariableVar) <* separator) `sepBy` (char ','))
 
-    parseFun :: Parser Primitive 
+    parseFun :: Parser Fun
     parseFun = do {
         string "fun";
         spaces;
@@ -284,6 +285,64 @@ module Parsers where
     removeComments (s1:xs) _ = [s1]
     removeComments [] _ = []
 
-    parseProgram :: Parser [Primitive]
-    parseProgram = parseFun `endBy` separator
+
+    instance Monoid Class where
+       mempty = Class "" [] [] []
+       mappend (Class s1 a1 b1 c1) (Class s2 a2 b2 c2) = 
+          Class (s1 ++ s2) (a1 ++ a2) (b1 ++ b2) (c1 ++ c2)
+
+    instance Semigroup Class where
+        (Class s1 a1 b1 c1) <> (Class s2 a2 b2 c2) = Class (s1 ++ s2) (a1 ++ a2) (b1 ++ b2) (c1 ++ c2)
+
+    parseClass :: Parser Class
+    parseClass = do {
+            string "class";
+            spaces;
+            name <- parseName;
+            spaces;
+            char '{';
+            separator;
+            cl0 <- return $ Class name [] [] [];
+            cl1 <- parseClassNext;
+            separator;
+            char '}';
+            return $ cl0 `mappend` cl1
+    }
+
+    parseClassNext :: Parser Class
+    parseClassNext = try (do {
+            fun <- parseFun;
+            cl1 <- return $ Class "" [] [fun] [];
+            separator;
+            cl2 <- parseClassNext;
+            return $ cl1 `mappend` cl2
+        })
+        <|> try (do {
+            val <- parseVariableVal;
+            cl1 <- return $ Class "" [val] [] [];
+            separator;
+            cl2 <- parseClassNext;
+            return $ cl1 `mappend` cl2
+        })
+        <|> try (do {
+            var <- parseVariableVar;
+            cl1 <- return $ Class "" [var] [] [];
+            separator;
+            cl2 <- parseClassNext;
+            return $ cl1 `mappend` cl2
+            })
+        <|> try (do {
+            cl <- parseClass;
+            cl1 <- return $ Class "" [] [] [cl];
+            separator;
+            cl2 <- parseClassNext;
+            return $ cl1 `mappend` cl2
+            })    
+        <|> do {
+            return $ Class "" [] [] [];
+        }
+    
+    parseProgram :: Parser Class
+    parseProgram = parseClass
+    
  
