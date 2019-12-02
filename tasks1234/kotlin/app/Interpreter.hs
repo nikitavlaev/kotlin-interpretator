@@ -27,7 +27,7 @@ module Interpreter where
 
     interpretFun :: [Fun] -> [InterObject] -> String -> [Expr] -> IO (KData, [InterObject])
     interpretFun = \program -> interFun program program where
-        interFun program ((Fun {name = name, args = args, returnType = returnType, body = body}):ps) stack nameFun argsFun 
+        interFun program ((Fun {funName = name, funArgs = args, funReturnType = returnType, funBody = body}):ps) stack nameFun argsFun 
             | name == nameFun && name !! 0 /= '.' && length args == length argsFun = do
                                         (kdatas, stack') <- interpretFunArgs program stack argsFun
                                         interpretBlock program (((\(Variable {varMutable = varMutable, varName = varName, varType = varType}, kdata) -> 

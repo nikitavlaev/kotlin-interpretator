@@ -1,12 +1,16 @@
+fun say_hello() {
+    println("What is your name?")
+    val name = readLine()
+    print("Hello, ")
+    println(name)
+}
+
 class Class {
-    fun Main()
-    {
-        val a = readLine();
-        println(a);
-    }
-    var a:Int
-    class b {
-        val c : String
+    fun Foo() {
+        
     }
 }
-/* trouble with true as var, reason - type order */
+fun Main() {
+    println("Start...")
+    say_hello()
+}

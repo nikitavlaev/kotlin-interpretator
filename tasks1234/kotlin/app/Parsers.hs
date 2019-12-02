@@ -332,7 +332,7 @@ module Parsers where
             return $ cl1 `mappend` cl2
             })
         <|> try (do {
-            cl <- parseClass;
+            cl <- parseClass' ""; -- here parseClass'
             cl1 <- return $ Class "" [] [] [cl];
             separator;
             cl2 <- parseClassNext;
@@ -341,7 +341,59 @@ module Parsers where
         <|> do {
             return $ Class "" [] [] [];
         }
+
+    parseClass' :: String -> Parser Class
+    parseClass' className = do {
+            string "class";
+            spaces;
+            name <- parseName;
+            spaces;
+            char '{';
+            separator;
+            cl0 <- return $ Class name [] [] [];
+            cl1 <- parseClassNext' (name ++ ".");
+            separator;
+            char '}';
+            return $ cl0 `mappend` cl1
+    }
+
+    parseClassNext' :: String -> Parser Class
+    parseClassNext' className = try (do {
+            fun <- parseFun;            --main difference starts here (f() -> A.f(x))
+            funFixed <- return $ Fun (className ++ (funName fun)) (funArgs fun) (funReturnType fun) (funBody fun);
+            cl1 <- return $ Class "" [] [funFixed] [];
+            separator;
+            cl2 <- parseClassNext' className;
+            return $ cl1 `mappend` cl2
+        })
+        <|> try (do {
+            val <- parseVariableVal;
+            cl1 <- return $ Class "" [val] [] [];
+            separator;
+            cl2 <- parseClassNext' className;
+            return $ cl1 `mappend` cl2
+        })
+        <|> try (do {
+            var <- parseVariableVar;
+            cl1 <- return $ Class "" [var] [] [];
+            separator;
+            cl2 <- parseClassNext' className;
+            return $ cl1 `mappend` cl2
+            })
+        <|> try (do {
+            cl <- parseClass' className;
+            cl1 <- return $ Class "" [] [] [cl];
+            separator;
+            cl2 <- parseClassNext' className;
+            return $ cl1 `mappend` cl2
+            })    
+        <|> do {
+            return $ Class "" [] [] [];
+        }
     
+    addOuterClass :: String -> String
+    addOuterClass program = "class Main {\n" ++ program ++ " }"
+
     parseProgram :: Parser Class
     parseProgram = parseClass
     
