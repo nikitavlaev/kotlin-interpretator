@@ -22,18 +22,20 @@ module Interpreter where
     showKData (KDArray ((KDChar c):cs)) = c : showKData (KDArray cs)
     showKData (KDArray []) = []
 
-    interpretProgram :: [Primitive] -> IO ()
-    interpretProgram program = interpretFun program [] "Main" [] >> return ()
+    interpretProgram :: Class -> IO ()
+    interpretProgram program = interpretFun (methods program) [] "Main" [] >> return ();
 
-    interpretFun :: [Primitive] -> [InterObject] -> String -> [Expr] -> IO (KData, [InterObject])
+    interpretFun :: [Fun] -> [InterObject] -> String -> [Expr] -> IO (KData, [InterObject])
     interpretFun = \program -> interFun program program where
-        interFun program ((Fun {name = name, args = args, returnType = returnType, body = body}):ps) stack nameFun argsFun | name == nameFun && name !! 0 /= '.' && length args == length argsFun = do
-            (kdatas, stack') <- interpretFunArgs program stack argsFun
-            interpretBlock program (((\(Variable {varMutable = varMutable, varName = varName, varType = varType}, kdata) -> InterVar {name = varName, ktype = varType, kdata = kdata, canModify = varMutable, connectedVariable = Nothing}) <$> (zip args kdatas)) ++ [InterFun] ++ stack') body
-        interFun program (p:ps) stack nameFun args = interFun program ps stack nameFun args
-        interFun program [] stack nameFun args = return (KDUnit, stack)
+        interFun program ((Fun {name = name, args = args, returnType = returnType, body = body}):ps) stack nameFun argsFun 
+            | name == nameFun && name !! 0 /= '.' && length args == length argsFun = do
+                                        (kdatas, stack') <- interpretFunArgs program stack argsFun
+                                        interpretBlock program (((\(Variable {varMutable = varMutable, varName = varName, varType = varType}, kdata) -> 
+                                            InterVar {name = varName, ktype = varType, kdata = kdata, canModify = varMutable, connectedVariable = Nothing}) <$> (zip args kdatas)) ++ [InterFun] ++ stack') body
+        interFun program (p:ps) stack nameFun argsFun = interFun program ps stack nameFun argsFun
+        interFun program [] stack nameFun argsFun = return (KDUnit, stack)
 
-    interpretFunArgs :: [Primitive] -> [InterObject] -> [Expr] -> IO ([KData], [InterObject])
+    interpretFunArgs :: [Fun] -> [InterObject] -> [Expr] -> IO ([KData], [InterObject])
     interpretFunArgs = \program -> interFunArgs program where
         interFunArgs program stack (arg:args) = do
             (kdata, stack') <- interpretExpression program stack arg
@@ -41,7 +43,7 @@ module Interpreter where
             return (kdata : kdatas, stack'')
         interFunArgs program stack [] = return ([], stack)
 
-    interpretBlock :: [Primitive] -> [InterObject] -> [FunPrimitive] -> IO (KData, [InterObject])
+    interpretBlock :: [Fun] -> [InterObject] -> [FunPrimitive] -> IO (KData, [InterObject])
     interpretBlock = \program -> interBlock program where
         interBlock program stack [fp] = interpretFunPrimitive program stack fp
         interBlock program stack (fp:fps) = do
@@ -49,7 +51,7 @@ module Interpreter where
             interBlock program stack' fps
         interBlock program stack [] = return (KDUnit, stack)
 
-    interpretFunPrimitive :: [Primitive] -> [InterObject] -> FunPrimitive -> IO (KData, [InterObject])
+    interpretFunPrimitive :: [Fun] -> [InterObject] -> FunPrimitive -> IO (KData, [InterObject])
     interpretFunPrimitive = \program -> interFunPrimitive program where
         interFunPrimitive program stack (Expression expr) = interpretExpression program stack expr
         interFunPrimitive program stack (ValInit {name = name, ktype = ktype}) = do
@@ -57,9 +59,9 @@ module Interpreter where
         interFunPrimitive program stack (VarInit {name = name, ktype = ktype}) = do
             return (KDUnit, (InterVar {name = name, ktype = ktype, kdata = KDUndefined, canModify = True, connectedVariable = Nothing}) : stack)
 
-    interpretExpression :: [Primitive] -> [InterObject] -> Expr -> IO (KData, [InterObject])
+    interpretExpression :: [Fun] -> [InterObject] -> Expr -> IO (KData, [InterObject])
     interpretExpression = \program -> interExpression program where
-        interExpression :: [Primitive] -> [InterObject] -> Expr -> IO (KData, [InterObject])
+        interExpression :: [Fun] -> [InterObject] -> Expr -> IO (KData, [InterObject])
         interExpression program stack (Val kdata) = return (kdata, stack)
         interExpression program stack (CallFun {name = "print", fargs = [exprMessage]}) = do
             (kdata, stack') <- interExpression program stack exprMessage

@@ -1,7 +1,8 @@
 class Class {
     fun Main()
     {
-
+        val a = readLine();
+        println(a);
     }
     var a:Int
     class b {
