@@ -1,3 +1,5 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+
 module Parsers where
 
     import Ast
@@ -112,17 +114,23 @@ module Parsers where
     parseOperator :: (Expr -> Expr -> Expr) -> Parser Expr -> String -> Parser Expr -> Parser Expr
     parseOperator f p1 op p2 = p1 >>= (\e1 -> try (parseHalfOperator f e1 op p2) <|> return e1)
 
+    parseBoolOperator :: (Expr -> Expr -> Expr) -> Parser Expr -> String -> Parser Expr -> Parser Expr
+    parseBoolOperator f p1 op p2 = p1 >>= (\e1 -> try (parseHalfBoolOperator f e1 op p2) <|> return e1)
+
     parseHalfOperator :: (Expr -> Expr -> Expr) -> Expr -> String -> Parser Expr -> Parser Expr
     parseHalfOperator f e1 op p2 = (spaces *> string op *> spaces *> p2) >>= (\e2 -> return $ f e1 e2)
+
+    parseHalfBoolOperator :: (Expr -> Expr -> Expr) -> Expr -> String -> Parser Expr -> Parser Expr
+    parseHalfBoolOperator f e1 op p2 = (spaces *> string op *> spaces *> (p2)) >>= (\e2 -> return $ f (CallFun {name = ".toBool", fargs = [e1]}) (CallFun {name = ".toBool", fargs = [e2]}))
 
     parseExpr :: Parser [FunPrimitive]
     parseExpr = ( : []) <$> Expression <$> parseOr
     
     parseOr :: Parser Expr
-    parseOr = parseOperator Or parseAnd "||" parseOr
+    parseOr = parseBoolOperator Or parseAnd "||" parseOr
     
     parseAnd :: Parser Expr
-    parseAnd = parseOperator And parseEquation "&&" parseAnd
+    parseAnd = parseBoolOperator And parseEquation "&&" parseAnd
     
     parseEquation :: Parser Expr
     parseEquation = parseAddSub >>= (\e1 ->
@@ -148,10 +156,10 @@ module Parsers where
         return e1)
     
     parseNot :: Parser Expr
-    parseNot = try (string "!" *> spaces *> (Not <$> parseIf)) <|> parseIf
+    parseNot = try (string "!" *> spaces *> ((\expr -> CallFun {name = ".toBool", fargs = [Not expr]}) <$> parseIf)) <|> parseIf
 
     parseIf :: Parser Expr
-    parseIf = try (If <$> (string "if" *> spaces *> parseInparens) <* separator <*> parseBlock <*> (try (separator *> string "else" *> separator *> parseBlock) <|> pure [])) <|>
+    parseIf = try (If <$> ((\expr -> CallFun {name = ".toBool", fargs = [expr]}) <$> (string "if" *> spaces *> parseInparens)) <* separator <*> parseBlock <*> (try (separator *> string "else" *> separator *> parseBlock) <|> pure [])) <|>
               try parseFunOrVar <|>
               parseValue
 
