@@ -25,7 +25,6 @@ module Interpreter where
     interpretProgram :: Class -> IO ()
     interpretProgram program = interpretFunByName (methods program) [] "Main" [] >> return ();
 
-    --args: program, meta, funName, ?
     interpretFunByName :: [Fun] -> [InterObject] -> String -> [Expr] -> IO (KData, [InterObject])
     interpretFunByName = \program -> helperFunByName program program where --carr
         helperFunByName program ((Fun {..}):ps) stack nameFun argsFun 
