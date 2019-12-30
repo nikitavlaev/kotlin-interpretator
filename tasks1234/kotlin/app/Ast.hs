@@ -1,11 +1,11 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
 module Ast where
-
     data Class = Class {name :: String, fields :: [Variable], methods :: [Fun], classes :: [Class]}
         deriving Show
 
-    data Fun = Fun {funName :: String, funArgs :: [Variable], funReturnType :: KType, funBody :: [FunPrimitive]} deriving Show
+    data Fun = Fun {name :: String, args :: [Variable], returnType :: KType, body :: [FunPrimitive]} 
+        deriving Show
 
     data FunPrimitive = 
           Expression Expr
@@ -22,7 +22,7 @@ module Ast where
     data Expr =
           Val KData
         | Var String
-        | CallFun {name :: String, fargs :: [Expr]}
+        | CallFun {name :: String, args :: [Expr]}
         | Lambda {largs :: [Variable], body :: [FunPrimitive]}
         | Add Expr Expr
         | Sub Expr Expr

@@ -9,6 +9,8 @@ class Class {
     fun Foo() {
         
     }
+    
+    val array: Array<Int>
 }
 fun Main() {
     println("Start...")

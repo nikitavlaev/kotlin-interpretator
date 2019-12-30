@@ -1,11 +1,11 @@
-module Parsers where
+{-# LANGUAGE DuplicateRecordFields #-}
 
+module Parsers where
     import Ast
     import Data.Functor.Identity
     import Text.Parsec hiding (spaces)
     import Data.Functor.Identity
 
- 
     type Parser = Parsec String ()
 
     spaces :: Parser ()
@@ -53,18 +53,22 @@ module Parsers where
     parseChar = (Val . KDChar) <$> between (char '\'') (char '\'') (char '\\' *> parseCharAfterLeftSlash <|> anyChar)
     
     parseBool :: Parser Expr
-    parseBool = do { string "true"; 
-                     return $ Val $ KDBool True } 
-                <|> do { string "false"; 
-                         return $ Val $ KDBool False }
+    parseBool = do 
+                string "true" 
+                return $ Val $ KDBool True 
+            <|> do 
+                string "false" 
+                return $ Val $ KDBool False 
     
     parseNull :: Parser Expr
-    parseNull = do { try $ string "null"; 
-                     return $ Val KDNull }
+    parseNull = do 
+                try $ string "null"
+                return $ Val KDNull
     
     parseUnit :: Parser Expr
-    parseUnit = do { try $ string "Unit"; 
-                     return $ Val KDUnit }
+    parseUnit = do 
+                try $ string "Unit" 
+                return $ Val KDUnit
     
     parseFunPrimitive :: Parser [FunPrimitive]
     parseFunPrimitive = try parseWhile 
@@ -83,18 +87,17 @@ module Parsers where
                   (Exception <$> parseName)))
 
     parseAssignment :: Parser [FunPrimitive]
-    parseAssignment = do {
-        lvalue <- parseFunOrVar;
-        index <- (Just <$> try (char '[' *> parseOr <* char ']') <|> pure Nothing);
-        spaces;
-        char '=';
-        spaces;
-        rvalue <- parseOr;
-        return [Expression $ CallFun ".set" (lvalue : rvalue : (case index of
-            Just ind -> [ind]
-            Nothing -> []
-         ))];
-    }
+    parseAssignment = do 
+                      lvalue <- parseFunOrVar
+                      index <- (Just <$> try (char '[' *> parseOr <* char ']') <|> pure Nothing)
+                      spaces
+                      char '='
+                      spaces
+                      rvalue <- parseOr
+                      return $ [Expression $ CallFun ".set" (lvalue : rvalue : (case index of
+                          Just ind -> [ind]
+                          Nothing -> [] ))]
+
 
     parseValue :: Parser Expr
     parseValue = try parseRange
@@ -160,18 +163,18 @@ module Parsers where
     parseName = (:) <$> letter <*> many (letter <|> digit <|> char '_')
 
     parseFunOrVar :: Parser Expr
-    parseFunOrVar = parseName >>= (\name ->
+    parseFunOrVar = parseName >>= (\parsedName ->
         ((char '.' *> parseFunOrVar) >>= (\field ->
             return $ case field of
-                CallFun ('.' : funName) ((Var fieldName) : funArgs) -> CallFun ('.' : funName) ((Var $ name ++ "." ++ fieldName) : funArgs)
-                CallFun funName funArgs -> CallFun ('.' : funName) ((Var name) : funArgs)
-                Var fieldName -> Var $ name ++ "." ++ fieldName
+                CallFun ('.' : name) ((Var fieldName) : args) -> CallFun ('.' : name) ((Var $ parsedName ++ "." ++ fieldName) : args)
+                CallFun name args -> CallFun ('.' : name) ((Var parsedName) : args)
+                Var fieldName -> Var $ parsedName ++ "." ++ fieldName
             )
         ) <|>
         try ((spaces *> char '(' *> spaces *> try (parseOr `customSepBy` (spaces *> char ',' <* spaces)) <* spaces <* char ')') >>= (\args ->
-            return $ CallFun name args)
+            return $ CallFun parsedName args)
         ) <|>
-        (return $ CallFun ".get" [Var name])
+        (return $ CallFun ".get" [Var parsedName])
      )
 
     parseBlock :: Parser [FunPrimitive]
@@ -179,37 +182,46 @@ module Parsers where
         ((( : []) . Expression) <$> parseIf)
 
     parseKTypeName :: Parser KType
-    parseKTypeName = try (do {
-        string "Int";
-        return $ KTInt
-    }) <|> try (do {
-        string "Long";
-        return $ KTLong
-    }) <|> try (do {
-        string "Byte";
-        return $ KTByte
-    }) <|> try (do {
-        string "Short";
-        return $ KTShort
-    }) <|> try (do {
-        string "Double";
-        return $ KTDouble
-    }) <|> try (do {
-        string "String";
-        return $ KTArray KTChar
-    }) <|> try (do {
-        string "Char";
-        return KTChar
-    }) <|> try (do {
-        string "Bool";
-        return KTBool
-    }) <|> try (do {
-        string "Unit";
-        return KTUnit
-    }) <|> do {
-        typeName <- parseName;
-        return $ KTUserType typeName
-    } 
+    parseKTypeName = try (do 
+                         string "Int"
+                         return $ KTInt
+                         ) 
+                <|> try (do 
+                        string "Long"
+                        return $ KTLong
+                        ) 
+                <|> try (do 
+                        string "Byte"
+                        return $ KTByte
+                        ) 
+                <|> try (do 
+                        string "Short"
+                        return $ KTShort
+                        ) 
+                <|> try (do 
+                        string "Double"
+                        return $ KTDouble
+                        )
+                <|> try (do
+                        string "String"
+                        return $ KTArray KTChar
+                        ) 
+                <|> try (do 
+                        string "Char"
+                        return KTChar
+                        ) 
+                <|> try (do 
+                        string "Bool"
+                        return KTBool
+                        ) 
+                <|> try (do 
+                        string "Unit"
+                        return KTUnit
+                        ) 
+                <|> do 
+                    typeName <- parseName
+                    return $ KTUserType typeName
+                    
 
     parseSimpleKType :: Parser KType
     parseSimpleKType = parseKTypeName >>= (\ktype ->
@@ -246,18 +258,17 @@ module Parsers where
      )
 
     parseLabels :: Parser [FunPrimitive]
-    parseLabels = do {
-        string "break";
-        return [Break];
-    } <|> do {
-        string "continue";
-        return [Continue];
-    } <|> do {
-        string "return ";
-        spaces;
-        result <- parseOr;
-        return $ [Return result];
-    }
+    parseLabels = do 
+                  string "break"
+                  return [Break]
+            <|> do 
+                string "continue"
+                return [Continue]
+            <|> do 
+                string "return "
+                spaces
+                result <- parseOr
+                return $ [Return result]
 
     parseVariableVar :: Parser Variable
     parseVariableVar = string "var " *> spaces *> (Variable <$> pure True <*> parseName <*> (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny))
@@ -269,19 +280,17 @@ module Parsers where
     parseFunParameters = between (char '(') (char ')') ((separator *> (try parseVariableVal <|> parseVariableVar) <* separator) `sepBy` (char ','))
 
     parseFun :: Parser Fun
-    parseFun = do {
-        string "fun";
-        spaces;
-        Fun <$> (spaces *> parseName) <* spaces <*> parseFunParameters <* spaces <*>
-            (try (char ':' *> spaces *> parseKType <* separator) <|> return KTUnit <* separator) <*>
-            ((try parseBlock) <|> char '=' *> separator *> parseExpr)
-    }
+    parseFun = do 
+               string "fun"
+               spaces
+               Fun <$> (spaces *> parseName) <* spaces <*> parseFunParameters <* spaces <*>
+                   (try (char ':' *> spaces *> parseKType <* separator) <|> return KTUnit <* separator) <*>
+                   ((try parseBlock) <|> char '=' *> separator *> parseExpr)
 
     removeComments :: String -> Int -> String
-    removeComments (s1:s2:xs) parNum | (s1 == '/' && s2 == '*') = removeComments xs (parNum + 1)
-                                     | (s1 == '*' && s2 == '/' && parNum > 0) = removeComments xs (parNum - 1)
-                                     | (parNum > 0) = removeComments (s2:xs) parNum
-                                     | (parNum == 0) = s1 : removeComments (s2:xs) parNum
+    removeComments ('/':'*':xs) parNum = removeComments xs (parNum + 1)
+    removeComments ('*':'/':xs) parNum = if (parNum > 0) then removeComments xs (parNum - 1) else removeComments xs parNum
+    removeComments (s1:s2:xs) parNum = if (parNum > 0) then removeComments (s2:xs) parNum else s1 : removeComments (s2:xs) parNum
     removeComments (s1:xs) _ = [s1]
     removeComments [] _ = []
 
@@ -295,101 +304,100 @@ module Parsers where
         (Class s1 a1 b1 c1) <> (Class s2 a2 b2 c2) = Class (s1 ++ s2) (a1 ++ a2) (b1 ++ b2) (c1 ++ c2)
 
     parseClass :: Parser Class
-    parseClass = do {
-            string "class";
-            spaces;
-            name <- parseName;
-            spaces;
-            char '{';
-            separator;
-            cl0 <- return $ Class name [] [] [];
-            cl1 <- parseClassNext;
-            separator;
-            char '}';
-            return $ cl0 `mappend` cl1
-    }
+    parseClass = do 
+                 string "class"
+                 spaces
+                 name <- parseName
+                 spaces
+                 char '{'
+                 separator
+                 cl0 <- return $ Class name [] [] []
+                 cl1 <- parseClassNext
+                 separator
+                 char '}'
+                 return $ cl0 `mappend` cl1
+    
 
     parseClassNext :: Parser Class
-    parseClassNext = try (do {
-            fun <- parseFun;
-            cl1 <- return $ Class "" [] [fun] [];
-            separator;
-            cl2 <- parseClassNext;
-            return $ cl1 `mappend` cl2
-        })
-        <|> try (do {
-            val <- parseVariableVal;
-            cl1 <- return $ Class "" [val] [] [];
-            separator;
-            cl2 <- parseClassNext;
-            return $ cl1 `mappend` cl2
-        })
-        <|> try (do {
-            var <- parseVariableVar;
-            cl1 <- return $ Class "" [var] [] [];
-            separator;
-            cl2 <- parseClassNext;
-            return $ cl1 `mappend` cl2
-            })
-        <|> try (do {
-            cl <- parseClass' ""; -- here parseClass'
-            cl1 <- return $ Class "" [] [] [cl];
-            separator;
-            cl2 <- parseClassNext;
-            return $ cl1 `mappend` cl2
-            })    
-        <|> do {
-            return $ Class "" [] [] [];
-        }
+    parseClassNext = try(do 
+                         fun <- parseFun
+                         cl1 <- return $ Class "" [] [fun] []
+                         separator
+                         cl2 <- parseClassNext
+                         return $ cl1 `mappend` cl2
+                        )
+                <|> try (do 
+                         val <- parseVariableVal
+                         cl1 <- return $ Class "" [val] [] []
+                         separator
+                         cl2 <- parseClassNext
+                         return $ cl1 `mappend` cl2
+                        )
+                <|> try (do 
+                         var <- parseVariableVar
+                         cl1 <- return $ Class "" [var] [] []
+                         separator
+                         cl2 <- parseClassNext
+                         return $ cl1 `mappend` cl2
+                        )
+                <|> try (do 
+                         cl <- parseClass' "" -- here parseClass'
+                         cl1 <- return $ Class "" [] [] [cl]
+                         separator
+                         cl2 <- parseClassNext
+                         return $ cl1 `mappend` cl2
+                        )    
+                <|> do 
+                    return $ Class "" [] [] []
+                
 
     parseClass' :: String -> Parser Class
-    parseClass' className = do {
-            string "class";
-            spaces;
-            name <- parseName;
-            spaces;
-            char '{';
-            separator;
-            cl0 <- return $ Class name [] [] [];
-            cl1 <- parseClassNext' (name ++ ".");
-            separator;
-            char '}';
-            return $ cl0 `mappend` cl1
-    }
+    parseClass' className = do 
+                            string "class"
+                            spaces
+                            name <- parseName
+                            spaces
+                            char '{'
+                            separator
+                            cl0 <- return $ Class name [] [] []
+                            cl1 <- parseClassNext' (name ++ ".")
+                            separator
+                            char '}'
+                            return $ cl0 `mappend` cl1
+    
 
     parseClassNext' :: String -> Parser Class
-    parseClassNext' className = try (do {
-            fun <- parseFun;            --main difference starts here (f() -> A.f(x))
-            funFixed <- return $ Fun (className ++ (funName fun)) (funArgs fun) (funReturnType fun) (funBody fun);
-            cl1 <- return $ Class "" [] [funFixed] [];
-            separator;
-            cl2 <- parseClassNext' className;
-            return $ cl1 `mappend` cl2
-        })
-        <|> try (do {
-            val <- parseVariableVal;
-            cl1 <- return $ Class "" [val] [] [];
-            separator;
-            cl2 <- parseClassNext' className;
-            return $ cl1 `mappend` cl2
-        })
-        <|> try (do {
-            var <- parseVariableVar;
-            cl1 <- return $ Class "" [var] [] [];
-            separator;
-            cl2 <- parseClassNext' className;
-            return $ cl1 `mappend` cl2
-            })
-        <|> try (do {
-            cl <- parseClass' className;
-            cl1 <- return $ Class "" [] [] [cl];
-            separator;
-            cl2 <- parseClassNext' className;
-            return $ cl1 `mappend` cl2
-            })    
-        <|> do {
-            return $ Class "" [] [] [];
-        }
+    parseClassNext' className = try (do 
+                                     fun <- parseFun    --main difference starts here (f() -> A.f(x))
+                                     funFixed <- return $ Fun (className ++ (name (fun :: Fun))) (args (fun :: Fun)) (returnType (fun :: Fun)) (body (fun :: Fun)) --duplicate records does not infer types
+                                     cl1 <- return $ Class "" [] [funFixed] []
+                                     separator
+                                     cl2 <- parseClassNext' className
+                                     return $ cl1 `mappend` cl2
+                                    )
+                            <|> try (do 
+                                     val <- parseVariableVal
+                                     cl1 <- return $ Class "" [val] [] []
+                                     separator
+                                     cl2 <- parseClassNext' className
+                                     return $ cl1 `mappend` cl2
+                                    )
+                            <|> try (do 
+                                     var <- parseVariableVar
+                                     cl1 <- return $ Class "" [var] [] []
+                                     separator
+                                     cl2 <- parseClassNext' className
+                                     return $ cl1 `mappend` cl2
+                                    )
+                            <|> try (do 
+                                     cl <- parseClass' className
+                                     cl1 <- return $ Class "" [] [] [cl]
+                                     separator
+                                     cl2 <- parseClassNext' className
+                                     return $ cl1 `mappend` cl2
+                                    )    
+                            <|> do 
+                                return $ Class "" [] [] []
     
     addOuterClass :: String -> String
     addOuterClass program = "class Main {\n" ++ program ++ " }"
