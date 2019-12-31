@@ -1,8 +1,14 @@
-fun Foo(): Bool {
-    val true1 = true
-    if (t) {
-        var b:Bool=2+3||5
+fun Main() {
+    val ans = (readLine())!!
+    if (ans[0] == 'y')
+    {
+        var a : Byte? = 6
+        println(a)
     }
-    return t
+    else
+    {
+        var a = 4
+        println("Your answer = " + ans)
+    }
 }
 /* trouble with true as var, reason - type order */

@@ -51,21 +51,7 @@ module Parsers where
         ))
     
     parseChar :: Parser Expr
-    parseChar = (Val . KDChar) <$> between (char '\'') (char '\'') (char '\\' *> parseCharAfterLeftSlash <|> anyChar)
-    
-    parseBool :: Parser Expr
-    parseBool = do { string "true"; 
-                     return $ Val $ KDBool True } 
-                <|> do { string "false"; 
-                         return $ Val $ KDBool False }
-    
-    parseNull :: Parser Expr
-    parseNull = do { try $ string "null"; 
-                     return $ Val KDNull }
-    
-    parseUnit :: Parser Expr
-    parseUnit = do { try $ string "Unit"; 
-                     return $ Val KDUnit }
+    parseChar = (Val . KDChar) <$> between (char '\'') (char '\'') ((char '\\' *> parseCharAfterLeftSlash) <|> anyChar)
     
     parseFunPrimitive :: Parser [FunPrimitive]
     parseFunPrimitive = try parseWhile 
@@ -99,13 +85,10 @@ module Parsers where
 
     parseValue :: Parser Expr
     parseValue = try parseRange
-                 -- <|> try parseBool
                  <|> try parseDouble 
                  <|> try parseInt 
                  <|> try parseString 
                  <|> try parseChar 
-                 <|> try parseNull 
-                 <|> try parseUnit 
                  <|> parseInparens
     
     parseInparens :: Parser Expr
@@ -156,7 +139,13 @@ module Parsers where
         return e1)
     
     parseNot :: Parser Expr
-    parseNot = try (string "!" *> spaces *> ((\expr -> CallFun {name = ".toBool", fargs = [Not expr]}) <$> parseIf)) <|> parseIf
+    parseNot = try (string "!" *> spaces *> ((\expr -> Not $ CallFun {name = ".toBool", fargs = [expr]}) <$> parseNot2)) <|> parseUnnullify
+
+    parseNot2 :: Parser Expr
+    parseNot2 = try (string "!" *> spaces *> ((\expr -> Not $ CallFun {name = ".toBool", fargs = [expr]}) <$> parseIf)) <|> parseIf
+
+    parseUnnullify :: Parser Expr
+    parseUnnullify = try ((\expr -> CallFun ".unnullify" [expr]) <$> (try parseFunOrVar <|> parseValue) <* spaces <* string "!!") <|> parseIf
 
     parseIf :: Parser Expr
     parseIf = try (If <$> ((\expr -> CallFun {name = ".toBool", fargs = [expr]}) <$> (string "if" *> spaces *> parseInparens)) <* separator <*> parseBlock <*> (try (separator *> string "else" *> separator *> parseBlock) <|> pure [])) <|>
@@ -168,6 +157,7 @@ module Parsers where
 
     parseFunOrVar :: Parser Expr
     parseFunOrVar = parseName >>= (\name ->
+        (char '[' *> spaces *> ((\expr -> CallFun ".get" [Var name, expr]) <$> parseOr) <* spaces <* char ']') <|>
         ((char '.' *> parseFunOrVar) >>= (\field ->
             return $ case field of
                 CallFun ('.' : funName) ((Var fieldName) : funArgs) -> CallFun ('.' : funName) ((Var $ name ++ "." ++ fieldName) : funArgs)
