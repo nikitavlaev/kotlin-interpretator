@@ -1,18 +1,11 @@
-fun say_hello() {
-    println("What is your name?")
-    val name = readLine()
-    print("Hello, ")
-    println(name)
-}
+var fib: Array<Int>
 
-class Class {
-    fun Foo() {
-        
-    }
-    
-    val array: Array<Int>
-}
 fun Main() {
-    println("Start...")
-    say_hello()
+    fib = 0..10
+    var i = 2
+    while (i < 11) {
+        fib[i] = fib[i - 2] + fib[i - 1]
+        i = i + 1
+    }
+    println(fib)
 }

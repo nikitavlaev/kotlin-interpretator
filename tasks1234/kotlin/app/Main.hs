@@ -11,7 +11,6 @@ module Main where
     
     main :: IO ()
     main = do
-        putStrLn "Start"
         program <- readFile "test/test_program.kt"
         putStrLn $ addOuterClass $ removeComments program 0
         ast <- return $ parse parseProgram "" $ addOuterClass $ removeComments program 0

@@ -50,19 +50,64 @@ module Ast where
         | KTUserType String
         | KTAny
         | KTUnknown
-        deriving Show
+        deriving Eq
+
+    instance Show KType where
+        show KTUnit = "Unit"
+        show KTBool = "Bool"
+        show KTChar = "Char"
+        show KTByte = "Byte"
+        show KTShort = "Short"
+        show KTInt = "Int"
+        show KTLong = "Long"
+        show KTDouble = "Double"
+        show (KTArray ktype) = "Array<" ++ show ktype ++ ">"
+        show (KTNullable ktype) = show ktype ++ "?"
+        show (KTUserType name) = name
+        show (KTAny) = "Any"
+        show (KTUnknown) = "???"
+
+    instance Ord KType where
+        KTByte <= KTByte = True
+        KTByte <= KTShort = True
+        KTByte <= KTInt = True
+        KTByte <= KTLong = True
+        KTShort <= KTShort = True
+        KTShort <= KTInt = True
+        KTShort <= KTLong = True
+        KTInt <= KTInt = True
+        KTInt <= KTLong = True
+        KTLong <= KTLong = True
+        _ <= _ = False
 
     data KData = KDUnit
         | KDNull
         | KDBool Bool
         | KDChar Char
-        | KDInt Int
+        | KDInt Integer
         | KDDouble Double
         | KDArray [KData]
-        | KDRecord [(String, KData)]
+        | KDRecord [(String, KData, KType, Bool)] -- name, data, type, canModify
         | KDUndefined
-        deriving Show
+        | KDError String
     
+    instance Show KData where
+        show KDUnit = "unit"
+        show KDNull = "null"
+        show (KDBool True) = "true"
+        show (KDBool False) = "false"
+        show (KDChar c) = [c]
+        show (KDInt x) = show x
+        show (KDDouble x) = show x
+        show (KDArray ((KDChar c):cs)) = c : show (KDArray cs)
+        show (KDArray []) = []
+        show (KDArray xs) = "[" ++ showArray xs ++ "]" where
+            showArray [x] = show x
+            showArray (x : xs) = show x ++ ", " ++ showArray xs
+            showArray [] = ""
+        show (KDUndefined) = "???"
+        show (KDError message) = "Error: " ++ message
+
     data Variable = Variable {varMutable :: Bool, varName :: String, varType :: KType} deriving Show
 
     data Exception = Exception {excMessage :: String} deriving Show
