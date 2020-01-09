@@ -1,5 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-
+{-# LANGUAGE RecordWildCards #-}
+{-# OPTIONS_GHC -fwarn-incomplete-patterns -fwarn-incomplete-uni-patterns #-}
 module Parsers where
     import Ast
     import Data.Functor.Identity
@@ -79,8 +80,9 @@ module Parsers where
         char '='
         separator
         rvalue <- parseOr
-        return $ case lvalue of
-            CallFun ".get" ((Var nameObject) : fields) -> [Expression $ CallFun ".set" (rvalue : (Var nameObject) : fields)]
+        let result = [Expression $ CallFun ".set" (rvalue : (Var nameObject) : fields)] where
+            CallFun ".get" ((Var nameObject) : fields) = lvalue
+        return result    
 
     parseValue :: Parser Expr
     parseValue = try parseRange
@@ -158,12 +160,14 @@ module Parsers where
     parseFunOrVar = helperName (CallFun ".get" []) where
         helperName (CallFun ".get" []) = do
             name <- parseName
-            let variable = CallFun ".get" [Var name]
-            helperInparens variable <|> helperIndex variable <|> helperPoint variable <|> return variable
-        helperName (CallFun ".get" fields) = do
+            let gettingVariableByName = CallFun ".get" [Var name] --variable while we have not encountered parentheses
+            --continue parsing phrase
+            helperInparens gettingVariableByName <|> helperIndex gettingVariableByName <|> helperPoint gettingVariableByName <|> return gettingVariableByName
+        helperName (CallFun ".get" prevPhrase) = do -- getting name after point
             name <- parseName
-            let newField = CallFun ".get" $ (Var name) : fields
-            helperInparens newField <|> helperIndex newField <|> helperPoint newField <|> return (CallFun ".get" $ reverse $ (Var name) : fields)
+            let gettingField = CallFun ".get" $ (Var name) : prevPhrase
+            --reversing because of interpretator convinience, can't construct at correct order from the beginning because of the pattern matching
+            helperInparens gettingField <|> helperIndex gettingField <|> helperPoint gettingField <|> return (CallFun ".get" $ reverse $ (Var name) : prevPhrase)
         helperInparens (CallFun ".get" [Var name]) = do
             char '('
             separator
@@ -172,25 +176,25 @@ module Parsers where
             char ')'
             let function = CallFun ".get" [CallFun name args]
             helperIndex function <|> helperPoint function <|> return function
-        helperInparens (CallFun ".get" ((Var field) : variable)) = do
+        helperInparens (CallFun ".get" ((Var field) : prevPhrase)) = do
             char '('
             separator
             args <- customSepBy parseOr $ spaces *> char ',' <* separator
             separator
             char ')'
-            let method = CallFun ".get" [CallFun ('.' : field) $ (CallFun ".get" $ reverse variable) : args]
+            let method = CallFun ".get" [CallFun ('.' : field) $ (CallFun ".get" $ reverse prevPhrase) : args]
             helperIndex method <|> helperPoint method <|> return method
-        helperIndex (CallFun ".get" fields) = do
+        helperIndex (CallFun ".get" prevPhrase) = do
             char '['
             separator
             index <- parseOr
             separator
             char ']'
-            let element = CallFun ".get" $ index : fields
-            helperIndex element <|> helperPoint element <|> return (CallFun ".get" $ reverse $ index : fields)
-        helperPoint (CallFun ".get" fields) = do
+            let element = CallFun ".get" $ index : prevPhrase
+            helperIndex element <|> helperPoint element <|> return (CallFun ".get" $ reverse $ index : prevPhrase)
+        helperPoint (CallFun ".get" prevPhrase) = do
             char '.'
-            helperName $ CallFun ".get" fields
+            helperName $ CallFun ".get" prevPhrase
 
     parseBlock :: Parser [FunPrimitive]
     parseBlock = (concat <$> try (char '{' *> separator *> customSepBy parseFunPrimitive semicolon <* (semicolon <|> separator) <* char '}')) <|>
@@ -291,8 +295,16 @@ module Parsers where
     parseVariableVal :: Parser Variable
     parseVariableVal = string "val " *> spaces *> (Variable <$> pure False <*> parseName <*> (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny))
 
+    parseOneFunParameter :: Parser Variable
+    parseOneFunParameter = (Variable <$> pure True <*> parseName <*> (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny))
+
     parseFunParameters :: Parser [Variable]
-    parseFunParameters = between (char '(') (char ')') ((separator *> (try parseVariableVal <|> parseVariableVar) <* separator) `sepBy` (char ','))
+    parseFunParameters = between (char '(') (char ')') ((separator *> (try parseOneFunParameter) <* separator) `sepBy` (char ','))
+
+    parseConstructorParams :: Parser [Variable]
+    parseConstructorParams = between (char '(') (char ')') ((separator *> (
+                                                                            try (parseVariableVal) <|> parseVariableVar
+                                                                          ) <* separator) `sepBy` (char ','))
 
     parseFun :: Parser Fun
     parseFun = do 
@@ -301,6 +313,14 @@ module Parsers where
                Fun <$> (spaces *> parseName) <* spaces <*> parseFunParameters <* spaces <*>
                    (try (char ':' *> spaces *> parseKType <* separator) <|> return KTUnit <* separator) <*>
                    ((try parseBlock) <|> char '=' *> separator *> parseExpr)
+
+    parseInit :: Class -> String -> [Variable] -> Parser Class
+    parseInit (Class {..}) className constructorFields = do -- we need to cut "." from className, because it is like "Class." at this point
+                string "init"
+                spaces
+                --TODO: Change KTUnit to Record..
+                fun <- Fun <$> pure className <*> pure constructorFields <*> pure KTUnit <*> ((try parseBlock) <|> char '=' *> separator *> parseExpr)
+                return $ Class name fields (fun:methods) classes 
 
     removeComments :: String -> Int -> String
     removeComments ('/':'*':xs) parNum = removeComments xs (parNum + 1)
@@ -312,112 +332,137 @@ module Parsers where
 
     instance Monoid Class where
        mempty = Class "" [] [] []
+       mappend (Class s1 a1 b1 c1) (Class "" a2 b2 c2) = 
+          Class (s1) (a1 ++ a2) (b1 ++ b2) (c1 ++ c2)
+       mappend (Class "" a1 b1 c1) (Class s2 a2 b2 c2) = 
+          Class (s2) (a1 ++ a2) (b1 ++ b2) (c1 ++ c2)   
        mappend (Class s1 a1 b1 c1) (Class s2 a2 b2 c2) = 
-          Class (s1 ++ s2) (a1 ++ a2) (b1 ++ b2) (c1 ++ c2)
+          Class (s1) (a1 ++ a2) (b1 ++ b2) (c1 ++ c2)
 
     instance Semigroup Class where
-        (Class s1 a1 b1 c1) <> (Class s2 a2 b2 c2) = Class (s1 ++ s2) (a1 ++ a2) (b1 ++ b2) (c1 ++ c2)
+        (Class "" a1 b1 c1) <> (Class s2 a2 b2 c2) = Class (s2) (a1 ++ a2) (b1 ++ b2) (c1 ++ c2)
+        (Class s1 a1 b1 c1) <> (Class "" a2 b2 c2) = Class (s1) (a1 ++ a2) (b1 ++ b2) (c1 ++ c2)
+        (Class s1 a1 b1 c1) <> (Class s2 a2 b2 c2) = Class (s1) (a1 ++ a2) (b1 ++ b2) (c1 ++ c2)
 
-    parseClass :: Parser Class
-    parseClass = do 
+    parseClassConstuctorFields :: Parser [Variable]
+    parseClassConstuctorFields = try (parseConstructorParams) <|> pure []
+
+    parseClass :: Class -> Parser (Class, Class)
+    --parent class can be changed, so we return it too
+    parseClass parentClass@(Class {..}) = do 
                  string "class"
                  spaces
-                 name <- parseName
+                 className <- parseName
+                 spaces
+                 constructorFields <- parseClassConstuctorFields
                  spaces
                  char '{'
                  separator
-                 cl0 <- return $ Class name [] [] []
-                 cl1 <- parseClassNext
+                 cl0 <- return $ Class className constructorFields [] []
+                 (parentClassUpdated, cl1) <- parseClassNext parentClass className constructorFields
                  separator
                  char '}'
-                 return $ cl0 `mappend` cl1
-    
+                 return (parentClassUpdated, cl0 `mappend` cl1)
 
-    parseClassNext :: Parser Class
-    parseClassNext = try(do 
+    parseClassNext :: Class -> String -> [Variable] -> Parser (Class,Class)
+    parseClassNext parentClass@(Class {..}) className constructorFields = try(do 
                          fun <- parseFun
                          cl1 <- return $ Class "" [] [fun] []
                          separator
-                         cl2 <- parseClassNext
-                         return $ cl1 `mappend` cl2
+                         (parentClassUpdated, cl2) <- parseClassNext parentClass className constructorFields
+                         return (parentClassUpdated, cl1 `mappend` cl2)
                         )
+                <|> try (do 
+                         parentClassUpdated <- parseInit parentClass className constructorFields
+                         separator
+                         (parentClassUpdated2, cl2) <- parseClassNext parentClassUpdated className constructorFields
+                         return (parentClassUpdated2, cl2)
+                        )        
                 <|> try (do 
                          val <- parseVariableVal
                          cl1 <- return $ Class "" [val] [] []
                          separator
-                         cl2 <- parseClassNext
-                         return $ cl1 `mappend` cl2
+                         (parentClassUpdated, cl2) <- parseClassNext parentClass className constructorFields
+                         return (parentClassUpdated, cl1 `mappend` cl2)
                         )
                 <|> try (do 
                          var <- parseVariableVar
                          cl1 <- return $ Class "" [var] [] []
                          separator
-                         cl2 <- parseClassNext
-                         return $ cl1 `mappend` cl2
+                         (parentClassUpdated, cl2) <- parseClassNext parentClass className constructorFields
+                         return (parentClassUpdated, cl1 `mappend` cl2)
                         )
                 <|> try (do 
-                         cl <- parseClass' "" -- here parseClass'
-                         cl1 <- return $ Class "" [] [] [cl]
+                         (classWithNewConstructors, cl) <- parseClass' $ Class className [] [] []
+                         cl1 <- return $ (Class "" [] [] [cl] `mappend` classWithNewConstructors)
                          separator
-                         cl2 <- parseClassNext
-                         return $ cl1 `mappend` cl2
+                         (parentClassUpdated, cl2) <- parseClassNext parentClass className constructorFields
+                         return (parentClassUpdated, cl1 `mappend` cl2)
                         )    
                 <|> do 
-                    return $ Class "" [] [] []
+                    return (parentClass, Class "" [] [] [])
                 
-
-    parseClass' :: String -> Parser Class
-    parseClass' className = do 
+    parseClass' :: Class -> Parser (Class, Class)
+    parseClass' parentClass@(Class {..}) = do 
                             string "class"
                             spaces
-                            name <- parseName
+                            className <- parseName
+                            spaces
+                            constructorFields <- parseClassConstuctorFields
                             spaces
                             char '{'
                             separator
-                            cl0 <- return $ Class name [] [] []
-                            cl1 <- parseClassNext' (name ++ ".")
+                            cl0 <- return $ Class className constructorFields [] []
+                            (parentClassUpdated, cl1) <- parseClassNext' parentClass className constructorFields
                             separator
                             char '}'
-                            return $ cl0 `mappend` cl1
+                            return (parentClassUpdated, cl0 `mappend` cl1)
     
-
-    parseClassNext' :: String -> Parser Class
-    parseClassNext' className = try (do 
-                                     fun <- parseFun    --main difference starts here (f() -> A.f(x))
-                                     funFixed <- return $ Fun (className ++ (name (fun :: Fun))) (args (fun :: Fun)) (returnType (fun :: Fun)) (body (fun :: Fun)) --duplicate records does not infer types
-                                     cl1 <- return $ Class "" [] [funFixed] []
+    parseClassNext' :: Class -> String -> [Variable] -> Parser (Class,Class)
+    parseClassNext' parentClass@(Class {..}) className constructorFields = try (do 
+                                     fun <- parseFun 
+                                     -- do we really need this? funFixed <- return $ Fun (className ++ "." ++ (name (fun :: Fun))) (args (fun :: Fun)) (returnType (fun :: Fun)) (body (fun :: Fun)) --duplicate records does not infer types
+                                     cl1 <- return $ Class "" [] [fun] []
                                      separator
-                                     cl2 <- parseClassNext' className
-                                     return $ cl1 `mappend` cl2
+                                     (parentClassUpdated, cl2) <- parseClassNext' parentClass className constructorFields
+                                     return (parentClassUpdated, cl1 `mappend` cl2)
                                     )
+                             <|> try (do 
+                                      parentClassUpdated <- parseInit parentClass className constructorFields
+                                      separator
+                                      (parentClassUpdated2, cl2) <- parseClassNext' parentClassUpdated className constructorFields
+                                      return (parentClassUpdated2, cl2)
+                                     )     
                             <|> try (do 
                                      val <- parseVariableVal
                                      cl1 <- return $ Class "" [val] [] []
                                      separator
-                                     cl2 <- parseClassNext' className
-                                     return $ cl1 `mappend` cl2
+                                     (parentClassUpdated, cl2) <- parseClassNext' parentClass className constructorFields
+                                     return (parentClassUpdated, cl1 `mappend` cl2)
                                     )
                             <|> try (do 
                                      var <- parseVariableVar
                                      cl1 <- return $ Class "" [var] [] []
                                      separator
-                                     cl2 <- parseClassNext' className
-                                     return $ cl1 `mappend` cl2
+                                     (parentClassUpdated, cl2) <- parseClassNext' parentClass className constructorFields
+                                     return (parentClassUpdated, cl1 `mappend` cl2)
                                     )
                             <|> try (do 
-                                     cl <- parseClass' className
-                                     cl1 <- return $ Class "" [] [] [cl]
+                                     (classWithNewConstructors, cl) <- parseClass' $ Class className [] [] []
+                                     cl1 <- return $ (Class "" [] [] [cl] `mappend` classWithNewConstructors)
                                      separator
-                                     cl2 <- parseClassNext' className
-                                     return $ cl1 `mappend` cl2
+                                     (parentClassUpdated, cl2) <- parseClassNext' parentClass className constructorFields
+                                     return (parentClassUpdated, cl1 `mappend` cl2) 
                                     )    
                             <|> do 
-                                return $ Class "" [] [] []
+                                return (parentClass, Class "" [] [] [])
     
     addOuterClass :: String -> String
     addOuterClass program = "class Main {\n" ++ program ++ " }"
 
     parseProgram :: Parser Class
-    parseProgram = parseClass
+    parseProgram = do
+                   (none, result) <- (parseClass $ Class "parentOfAll" [] [] [])
+                   return result
     
  

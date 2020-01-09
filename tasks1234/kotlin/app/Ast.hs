@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# OPTIONS_GHC -fwarn-incomplete-patterns -fwarn-incomplete-uni-patterns #-}
 
 module Ast where
     data Class = Class {name :: String, fields :: [Variable], methods :: [Fun], classes :: [Class]}
@@ -106,6 +107,9 @@ module Ast where
             showArray (x : xs) = show x ++ ", " ++ showArray xs
             showArray [] = ""
         show (KDUndefined) = "???"
+        show (KDRecord rc) = "Record: " ++ showRecord rc where
+            showRecord ((name', data', type', canModify'):rest) = name' ++ " " ++ (show data') ++ ":" ++ (show type') ++ " mut:" ++ (show canModify') ++ show rest
+            showRecord [] = []
         show (KDError message) = "Error: " ++ message
 
     data Variable = Variable {varMutable :: Bool, varName :: String, varType :: KType} deriving Show
