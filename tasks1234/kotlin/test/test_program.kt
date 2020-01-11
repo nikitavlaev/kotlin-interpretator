@@ -15,8 +15,7 @@ class MyClass (val name: String, var age: Int) {
 }
 
 fun Main() {
-    val a = 10
-    println(a)
+    val a = MyClass("name", 10)
     /*cl.Bar()*/
    /* fib = 0..10
     var i = 2

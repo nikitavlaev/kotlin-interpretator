@@ -6,6 +6,7 @@ module Parsers where
     import Data.Functor.Identity
     import Text.Parsec hiding (spaces)
     import Data.Functor.Identity
+    import Control.Monad
 
     type Parser = Parsec String ()
 
@@ -80,9 +81,10 @@ module Parsers where
         char '='
         separator
         rvalue <- parseOr
-        let result = [Expression $ CallFun ".set" (rvalue : (Var nameObject) : fields)] where
-            CallFun ".get" ((Var nameObject) : fields) = lvalue
-        return result    
+        case lvalue of
+            CallFun ".get" ((Var nameObject) : fields) -> 
+                return [Expression $ CallFun ".set" (rvalue : (Var nameObject) : fields)]
+            _ -> fail "Cannot assign to rvalue"  
 
     parseValue :: Parser Expr
     parseValue = try parseRange
@@ -314,14 +316,6 @@ module Parsers where
                    (try (char ':' *> spaces *> parseKType <* separator) <|> return KTUnit <* separator) <*>
                    ((try parseBlock) <|> char '=' *> separator *> parseExpr)
 
-    parseInit :: Class -> String -> [Variable] -> Parser Class
-    parseInit (Class {..}) className constructorFields = do -- we need to cut "." from className, because it is like "Class." at this point
-                string "init"
-                spaces
-                --TODO: Change KTUnit to Record..
-                fun <- Fun <$> pure className <*> pure constructorFields <*> pure KTUnit <*> ((try parseBlock) <|> char '=' *> separator *> parseExpr)
-                return $ Class name fields (fun:methods) classes 
-
     removeComments :: String -> Int -> String
     removeComments ('/':'*':xs) parNum = removeComments xs (parNum + 1)
     removeComments ('*':'/':xs) parNum = if (parNum > 0) then removeComments xs (parNum - 1) else removeComments xs parNum
@@ -362,7 +356,10 @@ module Parsers where
                  (parentClassUpdated, cl1) <- parseClassNext parentClass className constructorFields
                  separator
                  char '}'
-                 return (parentClassUpdated, cl0 `mappend` cl1)
+                 let standardConstructor = Fun className constructorFields (KTUserType className) [Expression $ CallFun ".init" [Var className]] --TODO: args for constructor
+                 let parentClassUpdated2 = Class parentName parentFields (standardConstructor : parentMethods) parentClasses where
+                     Class parentName parentFields parentMethods parentClasses = parentClassUpdated 
+                 return (parentClassUpdated2, cl0 `mappend` cl1)
 
     parseClassNext :: Class -> String -> [Variable] -> Parser (Class,Class)
     parseClassNext parentClass@(Class {..}) className constructorFields = try(do 
@@ -373,10 +370,13 @@ module Parsers where
                          return (parentClassUpdated, cl1 `mappend` cl2)
                         )
                 <|> try (do 
-                         parentClassUpdated <- parseInit parentClass className constructorFields
+                         string "init"
+                         spaces
+                         fun <- Fun <$> pure "init" <*> pure [] <*> pure KTUnit <*> ((try parseBlock) <|> char '=' *> separator *> parseExpr)
+                         cl1 <- return $ Class "" [] [fun] []
                          separator
-                         (parentClassUpdated2, cl2) <- parseClassNext parentClassUpdated className constructorFields
-                         return (parentClassUpdated2, cl2)
+                         (parentClassUpdated, cl2) <- parseClassNext parentClass className constructorFields
+                         return (parentClassUpdated, cl1 `mappend` cl2)
                         )        
                 <|> try (do 
                          val <- parseVariableVal
@@ -416,7 +416,10 @@ module Parsers where
                             (parentClassUpdated, cl1) <- parseClassNext' parentClass className constructorFields
                             separator
                             char '}'
-                            return (parentClassUpdated, cl0 `mappend` cl1)
+                            let standardConstructor = Fun className constructorFields (KTUserType className) [Expression $ CallFun ".init" [Var className]] --TODO: args for constructor
+                            let parentClassUpdated2 = Class parentName parentFields (standardConstructor : parentMethods) parentClasses where
+                                Class parentName parentFields parentMethods parentClasses = parentClassUpdated 
+                            return (parentClassUpdated2, cl0 `mappend` cl1)
     
     parseClassNext' :: Class -> String -> [Variable] -> Parser (Class,Class)
     parseClassNext' parentClass@(Class {..}) className constructorFields = try (do 
@@ -428,10 +431,13 @@ module Parsers where
                                      return (parentClassUpdated, cl1 `mappend` cl2)
                                     )
                              <|> try (do 
-                                      parentClassUpdated <- parseInit parentClass className constructorFields
+                                      string "init"
+                                      spaces
+                                      fun <- Fun <$> pure "init" <*> pure [] <*> pure KTUnit <*> ((try parseBlock) <|> char '=' *> separator *> parseExpr)
+                                      cl1 <- return $ Class "" [] [fun] []
                                       separator
-                                      (parentClassUpdated2, cl2) <- parseClassNext' parentClassUpdated className constructorFields
-                                      return (parentClassUpdated2, cl2)
+                                      (parentClassUpdated, cl2) <- parseClassNext parentClass className constructorFields
+                                      return (parentClassUpdated, cl1 `mappend` cl2)
                                      )     
                             <|> try (do 
                                      val <- parseVariableVal
