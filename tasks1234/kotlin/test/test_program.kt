@@ -1,22 +1,19 @@
 var fib: Array<Int> /*= Array(4,{i -> i*i})*/
 
-class MyClass (val name: String, var age: Int) {
+class MyClass (var name: String, var age: Int) {
     init {
         println("Constructor launched")
     }
-   /* fun Bar() {
+    fun Bar() { /*add this */
         println("Test passed")
     }
-    class Cl2 {
-        fun A() {
-            println("Test passed")
-        }
-    }*/
 }
 
 fun Main() {
     val a = MyClass("name", 10)
-    /*cl.Bar()*/
+    a.age = 11
+    println(a.age)
+    a.Bar()
    /* fib = 0..10
     var i = 2
     while (i < 11) {

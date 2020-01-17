@@ -38,6 +38,7 @@ executables:
     - parsec
     - pretty-simple
     - mtl
+    - split
 
 tests:
   kotlin-test:
