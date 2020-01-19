@@ -225,13 +225,14 @@ interpretExpression stack (CallFun ".get" (variable : fields)) = do
                 _ -> return (KDError $ show kdataIndex ++ " is not index of array", KTUnknown, stack')
         getFields stack _ ktypeVar ((Var fieldName) : fields) = return (KDError $ "The variable of type " ++ show ktypeVar ++ " does not have the field " ++ fieldName, KTUnknown, stack)
         getFields stack _ ktypeVar (field : fields) = return (KDError $ "Cannot take an index from the variable of type " ++ show ktypeVar, KTUnknown, stack)
+        
 interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields)) = do
     (kdataNewVal, ktypeNewVal, stack') <- interpretExpression stack exprNewVal
     interSet stack' stack' varName fields kdataNewVal ktypeNewVal where
         interSet :: [InterObject] -> [InterObject] -> String -> [Expr] -> KData -> KType -> IO (KData, KType, [InterObject])
         interSet stack (obj@(InterVar {..}) : objs) varName fields kdataNewVal ktypeNewVal
             | (name == varName) = do
-                --found needed variable
+                --found needed variable  
                 (varKData, varKType, stack') <- helperSet stack kdata ktype fields kdataNewVal ktypeNewVal
                 updateStack stack' varName varKData varKType -- where
             | otherwise = do
@@ -290,22 +291,27 @@ interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields))
                         return (KDError $ "Type " ++ show ktypeOldVar ++ " has no indexes", KTUnknown, stack)
 
                     updateStack :: [InterObject] -> String -> KData -> KType -> IO (KData, KType, [InterObject])
-                    updateStack (obj@(InterVar name ktype kdata canModify Nothing) : objs) varName varKData varKType
-                        | name == varName && ktype /= KTUnknown && canModify == True = do
-                            case dataConversionFromTypeToType varKData varKType ktype of
-                                KDError m -> return (KDError m, KTUnknown, obj : objs)
-                                kdataRes -> return (KDUndefined, KTUnknown, (InterVar name ktype kdataRes True Nothing) : objs)
-                        | name == varName && ktype == KTUnknown = return (KDUndefined, KTUnknown, (InterVar name varKType varKData canModify Nothing) : objs)
-                        | name == varName && ktype /= KTUnknown && canModify == False  =
-                            return (KDError $ "Cannot assign a new value to the val-variable " ++ varName, KTUnknown, obj : objs)
-                        | otherwise = do
-                            (kdataRes, ktypeRes, objs') <- updateStack objs varName varKData varKType
-                            return (kdataRes, ktypeRes, obj : objs')
-                    updateStack (obj : objs) varName varKData varKType = do
-                        (kdataRes, ktypeRes, objs') <- updateStack objs varName varKData varKType
-                        return (kdataRes, ktypeRes, obj : objs')
-                    updateStack [] varName varKData varKType = return (KDError $ "Variable " ++ varName ++ " was not found", KTUnknown, [])
-                    
+                    updateStack stack varName varKData varKType = do 
+                        let (var, revStackHead, stackTail) = findVarInStack stack varName where
+                            findVarInStack :: [InterObject] -> String -> (Maybe InterObject, [InterObject], [InterObject])
+                            findVarInStack (obj@(InterVar {..}) : objs) varName 
+                                | (name == varName) = (Just obj, [], objs)
+                                | otherwise = do
+                                    let (result, stackHead, stackTail) = findVarInStack objs varName
+                                    (result, obj:stackHead, stackTail)
+                            findVarInStack (obj:objs) varName = do
+                                    let (result, stackHead, stackTail) = findVarInStack objs varName
+                                    (result, obj:stackHead, stackTail)
+                            findVarInStack [] _ = (Nothing, [], [])
+                        case var of 
+                            (Just (InterVar {..})) -> do
+                                let stackHead = reverse revStackHead
+                                case ktype of
+                                    KTUnknown -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name varKType varKData canModify Nothing) : stackTail))
+                                    _ -> case dataConversionFromTypeToType varKData varKType ktype of
+                                            KDError m -> return (KDError m, KTUnknown, [])
+                                            kdataRes -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name ktype kdataRes True Nothing) : stackTail))    
+                            Nothing -> return (KDError $ "Variable " ++ varName ++ " was not found", KTUnknown, [])   
                         
         --skip all non-variables                
         interSet stack (obj : objs) varName fields kdataNewVal ktypeNewVal = do

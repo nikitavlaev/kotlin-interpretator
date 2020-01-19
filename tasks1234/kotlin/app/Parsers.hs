@@ -438,9 +438,11 @@ parseClass' parentClass = do
 
 parseClassNext' :: Class -> String -> [Variable] -> Parser (Class,Class)
 parseClassNext' parentClass@(Class {..}) className constructorFields = try (do 
-                                    fun <- parseFun 
+                                    fun <- parseFun --TODO connectedVariable
+                                    let thisFun = Fun funName funArgs funRType ((Expression $ (CallFun ".set" [CallFun ".get" [Var className], Var "this"])):funBody) where
+                                        (Fun funName funArgs funRType funBody) = fun
                                     -- do we really need this? funFixed <- return $ Fun (className ++ "." ++ (name (fun :: Fun))) (args (fun :: Fun)) (returnType (fun :: Fun)) (body (fun :: Fun)) --duplicate records does not infer types
-                                    cl1 <- return $ Class "" [] [fun] []
+                                    cl1 <- return $ Class "" [] [thisFun] []
                                     separator
                                     (parentClassUpdated, cl2) <- parseClassNext' parentClass className constructorFields
                                     return (parentClassUpdated, cl1 `mappend` cl2)
