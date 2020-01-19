@@ -15,7 +15,7 @@ instance Show a => Show (Log a) where
 
 data InterObject =
         InterFun
-    | InterVar {name :: String, ktype :: KType, kdata :: KData, canModify :: Bool, connectedVariable :: Maybe String}
+    | InterVar {name :: String, ktype :: KType, kdata :: KData, canModify :: Bool, connectedVariable :: Maybe Expr}
     | InterBlock
     | InterMainClass {cl :: Class}
     deriving Show
@@ -90,24 +90,24 @@ interpretFunByName currentClass stack ('.' : name) (this : args) = do --ClassA.C
     (kdataThis, ktypeThis, stack') <- interpretExpression stack this
     case ktypeThis of
         KTUserType nameUserType -> do
-                            let subTypes = splitOn "." nameUserType
-                            descendInClasses currentClass stack' subTypes name args where
-                                descendInClasses :: Class -> [InterObject] -> [String] -> String -> [Expr] -> IO (KData, KType, [InterObject])
-                                descendInClasses currentClass stack subTypes funName args = do
-                                    case subTypes of
-                                        [] -> return (KDError $ "Empty name of user type", KTUnknown, stack)
-                                        (className:cls) -> do
-                                            let targetClass = findClassByName className (classes currentClass)
-                                            case targetClass of
-                                                Nothing -> return (KDError $ "No such class " ++ className, KTUnknown, stack)
-                                                (Just cl) -> case cls of
-                                                                [] -> interpretFunByName cl stack funName args
-                                                                _  -> descendInClasses cl stack cls funName args         
+            let subTypes = splitOn "." nameUserType
+            descendInClasses currentClass stack' subTypes name (this : args) where
+                descendInClasses :: Class -> [InterObject] -> [String] -> String -> [Expr] -> IO (KData, KType, [InterObject])
+                descendInClasses currentClass stack subTypes funName args = do
+                    case subTypes of
+                        [] -> return (KDError $ "Empty name of user type", KTUnknown, stack)
+                        (className:cls) -> do
+                            let targetClass = findClassByName className (classes currentClass)
+                            case targetClass of
+                                Nothing -> return (KDError $ "No such class " ++ className, KTUnknown, stack)
+                                (Just cl) -> case cls of
+                                    [] -> interpretFunByName cl stack funName args
+                                    _  -> descendInClasses cl stack cls funName args         
         _ -> return (KDError $ "Cannot override class " ++ show ktypeThis, KTUnknown, stack')
 
-interpretFunByName (Class _ _ ((Fun nameFun argsFun typeFun bodyFun) : otherFuns) _) stack name args
+interpretFunByName currentClass@(Class _ _ ((Fun nameFun argsFun typeFun bodyFun) : otherFuns) _) stack name args
     | (nameFun == name) && (length argsFun == length args) = do
-        (kdatas, ktypes, stack') <- trace name $ interpretFunArgs stack args
+        (kdatas, ktypes, stack') <- {-trace name $-} interpretFunArgs stack args
         let (kdatas', ktypes') = checkArgsTypes argsFun kdatas ktypes where
             checkArgsTypes :: [Variable] -> [KData] -> [KType] -> ([KData],[KType])
             checkArgsTypes [] [] [] = ([], [])
@@ -119,12 +119,23 @@ interpretFunByName (Class _ _ ((Fun nameFun argsFun typeFun bodyFun) : otherFuns
             [KDError m] -> interpretFunByName (Class "" [] otherFuns []) stack' name args
             _ -> do
                 let argNames = varName <$> argsFun
-                let createVariable = \(kdata', ktype', varName) -> InterVar varName ktype' kdata' False Nothing
-                let argsToStackFormat = createVariable <$> (zip3 kdatas' ktypes' argNames)
+                let argMutables = varMutable <$> argsFun
+                let createVariable = (\(kdata', ktype', varName, varMutable, arg) -> InterVar varName ktype' kdata' False (if varMutable then Just arg else Nothing))
+                let argsToStackFormat = createVariable <$> (zip5 kdatas' ktypes' argNames argMutables args) where
+                    zip5 :: [a] -> [b] -> [c] -> [d] -> [e] -> [(a, b, c, d, e)]
+                    zip5 (a : as) (b : bs) (c : cs) (d : ds) (e : es) = (a, b, c, d, e) : zip5 as bs cs ds es
+                    zip5 [] [] [] [] [] = []
+                --pPrint $ Log "Name started function" name
+                --pPrint $ Log "Stack before working function" $ init stack'
                 (kdataResult, ktypeResult, stack'') <- interpretBlock (argsToStackFormat ++ [InterFun] ++ stack') bodyFun
+                let stack''' = deleteFun stack'' where
+                    deleteFun (InterFun : objs) = objs
+                    deleteFun (_ : objs) = deleteFun objs
+                --pPrint $ Log "Name ended function" name
+                --pPrint $ Log "Stack after working function" $ init stack'''
                 return $ case dataConversionFromTypeToType kdataResult ktypeResult typeFun of
-                    KDError m -> trace ("Typecheck fail"++ show typeFun ++ show ktypeResult ++ show kdataResult) $ (KDError m, KTUnknown, stack'')
-                    kdataResult' -> (kdataResult', typeFun, stack'')
+                    KDError m -> trace ("Typecheck fail" ++ show typeFun ++ show ktypeResult ++ show kdataResult) $ (KDError m, KTUnknown, stack''')
+                    kdataResult' -> (kdataResult', typeFun, stack''')
     | otherwise = interpretFunByName (Class "" [] otherFuns []) stack name args
 
 interpretFunByName (Class _ _ [] _) stack name args = return (KDError $ "Function " ++ name ++ " was not found", KTAny, stack)
@@ -138,13 +149,17 @@ interpretFunArgs stack [] = return ([], [], stack)
 
 interpretBlock :: [InterObject] -> [FunPrimitive] -> IO (KData, KType, [InterObject])
 interpretBlock stack = interBlock (InterBlock : stack) where
-    deleteBlock (InterBlock : InterFun : objs) = objs
     deleteBlock (InterBlock : objs) = objs
     deleteBlock (_ : objs) = deleteBlock objs
     interBlock stack [fp] = do
+        --pPrint $ Log "Stack" $ init stack
+        --pPrint $ Log "Action" fp
         (kdata, ktype, stack') <- interpretFunPrimitive stack fp
+        --pPrint $ Log "Stack" $ init stack'
         return (kdata, ktype, deleteBlock stack')
     interBlock stack (fp:fps) = do
+        --pPrint $ Log "Stack" $ init stack
+        --pPrint $ Log "Action" fp
         (kdata, ktype, stack') <- interpretFunPrimitive stack fp
         case kdata of
             KDError m -> return (kdata, ktype, deleteBlock stack')
@@ -225,14 +240,14 @@ interpretExpression stack (CallFun ".get" (variable : fields)) = do
                 _ -> return (KDError $ show kdataIndex ++ " is not index of array", KTUnknown, stack')
         getFields stack _ ktypeVar ((Var fieldName) : fields) = return (KDError $ "The variable of type " ++ show ktypeVar ++ " does not have the field " ++ fieldName, KTUnknown, stack)
         getFields stack _ ktypeVar (field : fields) = return (KDError $ "Cannot take an index from the variable of type " ++ show ktypeVar, KTUnknown, stack)
-        
+
 interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields)) = do
     (kdataNewVal, ktypeNewVal, stack') <- interpretExpression stack exprNewVal
     interSet stack' stack' varName fields kdataNewVal ktypeNewVal where
         interSet :: [InterObject] -> [InterObject] -> String -> [Expr] -> KData -> KType -> IO (KData, KType, [InterObject])
         interSet stack (obj@(InterVar {..}) : objs) varName fields kdataNewVal ktypeNewVal
             | (name == varName) = do
-                --found needed variable  
+                --found needed variable
                 (varKData, varKType, stack') <- helperSet stack kdata ktype fields kdataNewVal ktypeNewVal
                 updateStack stack' varName varKData varKType -- where
             | otherwise = do
@@ -248,7 +263,7 @@ interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields))
                             kdataRes -> (kdataRes, ktypeOldVar, stack)
                     helperSet stack (KDRecord ((fieldNameOldVar, fieldKDataOldVar, fieldKTypeOldVar, fieldCanModifyOldVar) : fieldsOldVar))
                                     (KTUserType nameUserType)
-                                    ((Var fieldName) : fields) 
+                                    ((Var fieldName) : fields)
                                     kdataNewVals
                                     ktypeNewVal
                         | (fieldNameOldVar == fieldName) && (fieldCanModifyOldVar == True || fieldKTypeOldVar == KTUnknown || ((length fieldsOldVar) > 0)) = do
@@ -290,11 +305,16 @@ interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields))
                     helperSet stack _ ktypeOldVar (exprIndex : fields) kdataNewVal ktypeNewVal =
                         return (KDError $ "Type " ++ show ktypeOldVar ++ " has no indexes", KTUnknown, stack)
 
+                    splitStackByInterFun :: [InterObject] -> ([InterObject], [InterObject])
+                    splitStackByInterFun (InterFun : objs) = ([], objs)
+                    splitStackByInterFun (obj : objs) = (obj : revStackHead, stackTail) where
+                        (revStackHead, stackTail) = splitStackByInterFun objs
+
                     updateStack :: [InterObject] -> String -> KData -> KType -> IO (KData, KType, [InterObject])
-                    updateStack stack varName varKData varKType = do 
+                    updateStack stack varName varKData varKType = do
                         let (var, revStackHead, stackTail) = findVarInStack stack varName where
                             findVarInStack :: [InterObject] -> String -> (Maybe InterObject, [InterObject], [InterObject])
-                            findVarInStack (obj@(InterVar {..}) : objs) varName 
+                            findVarInStack (obj@(InterVar {..}) : objs) varName
                                 | (name == varName) = (Just obj, [], objs)
                                 | otherwise = do
                                     let (result, stackHead, stackTail) = findVarInStack objs varName
@@ -303,17 +323,26 @@ interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields))
                                     let (result, stackHead, stackTail) = findVarInStack objs varName
                                     (result, obj:stackHead, stackTail)
                             findVarInStack [] _ = (Nothing, [], [])
-                        case var of 
+                        case var of
                             (Just (InterVar {..})) -> do
                                 let stackHead = reverse revStackHead
+                                (KDUndefined, KTUnknown, newStackTail) <- case connectedVariable of
+                                    Nothing -> return (KDUndefined, KTUnknown, stackTail)
+                                    Just (CallFun ".get" ((Var varName') : fields')) -> do
+                                        let (revStackHead', stackTail') = splitStackByInterFun stackTail
+                                        (kdataSet, ktypeSet, newStackTail') <- interSet stackTail' stackTail' varName' (fields' ++ fields) kdataNewVal ktypeNewVal
+                                        case kdataSet of
+                                            KDUndefined -> return ()
+                                            _ -> pPrint $ Log "Error" kdataSet
+                                        return (KDUndefined, KTUnknown, reverse revStackHead' ++ [InterFun] ++ newStackTail')
                                 case ktype of
-                                    KTUnknown -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name varKType varKData canModify Nothing) : stackTail))
+                                    KTUnknown -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name varKType varKData canModify connectedVariable) : newStackTail))
                                     _ -> case dataConversionFromTypeToType varKData varKType ktype of
                                             KDError m -> return (KDError m, KTUnknown, [])
-                                            kdataRes -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name ktype kdataRes True Nothing) : stackTail))    
-                            Nothing -> return (KDError $ "Variable " ++ varName ++ " was not found", KTUnknown, [])   
-                        
-        --skip all non-variables                
+                                            kdataRes -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name ktype kdataRes canModify connectedVariable) : newStackTail))
+                            Nothing -> return (KDError $ "Variable " ++ varName ++ " was not found", KTUnknown, [])
+ 
+        --skip all non-variables
         interSet stack (obj : objs) varName fields kdataNewVal ktypeNewVal = do
             (kdata', ktype', objs') <- interSet stack objs varName fields kdataNewVal ktypeNewVal
             return (kdata', ktype', obj : objs')

@@ -158,6 +158,9 @@ parseIf = try (If <$> ((\expr -> CallFun {name = ".toBool", args = [expr]}) <$> 
 parseName :: Parser String
 parseName = (:) <$> letter <*> many (letter <|> digit <|> char '_')
 
+parseNameWithDot :: Parser String
+parseNameWithDot = (:) <$> letter <*> many (letter <|> digit <|> char '_' <|> char '.')
+
 parseFunOrVar :: Parser Expr
 parseFunOrVar = helperName (CallFun ".get" []) where
     helperName (CallFun ".get" []) = do
@@ -240,7 +243,7 @@ parseKTypeName = try (do
                     return KTUnit
                     ) 
             <|> do 
-                typeName <- parseName
+                typeName <- parseNameWithDot
                 return $ KTUserType typeName
                 
 
@@ -298,7 +301,7 @@ parseVariableVal :: Parser Variable
 parseVariableVal = string "val " *> spaces *> (Variable <$> pure False <*> parseName <*> (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny))
 
 parseOneFunParameter :: Parser Variable
-parseOneFunParameter = (Variable <$> pure True <*> parseName <*> (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny))
+parseOneFunParameter = (Variable <$> pure False <*> parseName <*> (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTAny))
 
 parseFunParameters :: Parser [Variable]
 parseFunParameters = between (char '(') (char ')') ((separator *> (try parseOneFunParameter) <* separator) `sepBy` (char ','))
@@ -341,110 +344,81 @@ instance Semigroup Class where
 parseClassConstuctorFields :: Parser [Variable]
 parseClassConstuctorFields = try (parseConstructorParams) <|> pure []
 
-parseClass :: Class -> Parser (Class, Class)
---parent class can be changed, so we return it too
-parseClass parentClass@(Class {..}) = do 
-                string "class"
-                spaces
-                className <- parseName
-                spaces
-                constructorFields <- parseClassConstuctorFields
-                spaces
-                char '{'
-                separator
-                cl0 <- return $ Class className constructorFields [] []
-                (parentClassUpdated, cl1) <- parseClassNext parentClass className constructorFields
-                separator
-                char '}'
-                let standardConstructor = Fun className constructorFields (KTUserType className) [Expression $ CallFun ".init" [Var className]] 
-                let parentClassUpdated2 = Class parentName parentFields (standardConstructor : parentMethods) parentClasses where
-                    Class parentName parentFields parentMethods parentClasses = parentClassUpdated 
-                return (parentClassUpdated2, cl0 `mappend` cl1)
-
-parseClassNext :: Class -> String -> [Variable] -> Parser (Class,Class)
-parseClassNext parentClass@(Class {..}) className constructorFields = try(do 
+parseProgram :: Parser Class
+parseProgram =  try (do 
                         fun <- parseFun
                         cl1 <- return $ Class "" [] [fun] []
                         separator
-                        (parentClassUpdated, cl2) <- parseClassNext parentClass className constructorFields
-                        return (parentClassUpdated, cl1 `mappend` cl2)
+                        cl2 <- parseProgram
+                        return $ cl1 `mappend` cl2
                     )
-            <|> try (do 
-                        string "init"
-                        spaces
-                        fun <- Fun <$> pure "init" <*> pure [] <*> pure KTUnit <*> ((try parseBlock) <|> char '=' *> separator *> parseExpr)
-                        cl1 <- return $ Class "" [] [fun] []
-                        separator
-                        (parentClassUpdated, cl2) <- parseClassNext parentClass className constructorFields
-                        return (parentClassUpdated, cl1 `mappend` cl2)
-                    )        
             <|> try (do 
                         val <- parseVariableVal
                         cl1 <- return $ Class "" [val] [] []
                         separator
-                        (parentClassUpdated, cl2) <- parseClassNext parentClass className constructorFields
-                        return (parentClassUpdated, cl1 `mappend` cl2)
+                        cl2 <- parseProgram
+                        return $ cl1 `mappend` cl2
                     )
             <|> try (do 
                         var <- parseVariableVar
                         cl1 <- return $ Class "" [var] [] []
                         separator
-                        (parentClassUpdated, cl2) <- parseClassNext parentClass className constructorFields
-                        return (parentClassUpdated, cl1 `mappend` cl2)
+                        cl2 <- parseProgram
+                        return $ cl1 `mappend` cl2
                     )
             <|> try (do 
-                        (classWithNewConstructors, cl) <- parseClass' $ Class className [] [] []
+                        (classWithNewConstructors, cl) <- parseClass (Class "Main" [] [] []) ""
                         cl1 <- return $ (Class "" [] [] [cl] `mappend` classWithNewConstructors)
                         separator
-                        (parentClassUpdated, cl2) <- parseClassNext parentClass className constructorFields
-                        return (parentClassUpdated, cl1 `mappend` cl2)
+                        cl2 <- parseProgram
+                        return $ cl1 `mappend` cl2
                     )    
             <|> do 
-                return (parentClass, Class "" [] [] [])
-            
-parseClass' :: Class -> Parser (Class, Class)
-parseClass' parentClass = do 
-                        string "class"
-                        spaces
-                        className <- parseName
-                        spaces
-                        constructorFields <- parseClassConstuctorFields
-                        spaces
-                        char '{'
-                        separator
-                        cl0 <- return $ Class className constructorFields [] []
-                        let standardConstructor = Fun className constructorFields (KTUserType className) [VarInit "this" (KTUserType className)]  
-                        let parentClassUpdated = Class parentName parentFields (standardConstructor : parentMethods) parentClasses where
-                            Class parentName parentFields parentMethods parentClasses = parentClass
-                        (parentClassUpdated2, cl1) <- parseClassNext' parentClassUpdated className constructorFields
-                        separator
-                        char '}'
-                        let newMethod = Fun className args returnType ([firstPart] ++ 
-                                                                        [(Expression $ (CallFun ".set" ([Val $ KDRecord (translateVarListToEmptyRecord (fields $ cl0 `mappend` cl1))] ++ [Var "this"]) ))] ++
-                                                                        (getSetters constructorFields) ++
-                                                                        initPart ++
-                                                                        [(Expression $ (CallFun ".get" [Var "this"]))]) where
-                            translateVarListToEmptyRecord :: [Variable] -> [(String, KData, KType, Bool)]
-                            translateVarListToEmptyRecord ((Variable varMutable varName varType) : vs) = (varName, KDUndefined, varType, varMutable) : (translateVarListToEmptyRecord vs)
-                            translateVarListToEmptyRecord [] = [] 
-                            (Class _ _ ((Fun _ args returnType (firstPart:initPart)):mtds) _ ) = parentClassUpdated2
-                            getSetters :: [Variable] -> [FunPrimitive]
-                            getSetters [] = []
-                            getSetters ((Variable {..}): fds) = (Expression $ (CallFun ".set" [CallFun ".get" [Var varName], Var "this", Var varName])) : (getSetters fds)
-        
-                        let parentClassUpdated3 = Class parentName parentFields (newMethod : prevMethods) parentClasses where
-                            (Class parentName parentFields (oldMethod : prevMethods) parentClasses) = parentClassUpdated2    
-                        return (parentClassUpdated3, cl0 `mappend` cl1)
+                return $ Class "Main" [] [] []
 
-parseClassNext' :: Class -> String -> [Variable] -> Parser (Class,Class)
-parseClassNext' parentClass@(Class {..}) className constructorFields = try (do 
-                                    fun <- parseFun --TODO connectedVariable
-                                    let thisFun = Fun funName funArgs funRType ((Expression $ (CallFun ".set" [CallFun ".get" [Var className], Var "this"])):funBody) where
-                                        (Fun funName funArgs funRType funBody) = fun
+parseClass :: Class -> String -> Parser (Class, Class)
+parseClass parentClass parentClassNameWithDot = do
+        string "class"
+        spaces
+        className <- parseName
+        spaces
+        constructorFields <- parseClassConstuctorFields
+        spaces
+        char '{'
+        separator
+        cl0 <- return $ Class className constructorFields [] []
+        let standardConstructor = Fun className notModifyConstructorFields (KTUserType className) [VarInit "this" (KTUserType $ parentClassNameWithDot ++ className)] where
+                notModifyConstructorFields = (\(Variable _ varName varType) -> Variable False varName varType) <$> constructorFields
+        let parentClassUpdated = Class parentName parentFields (standardConstructor : parentMethods) parentClasses where
+                Class parentName parentFields parentMethods parentClasses = parentClass
+        (parentClassUpdated2, cl1) <- parseClassNext parentClassUpdated (parentClassNameWithDot ++ className) constructorFields
+        separator
+        char '}'
+        let newMethod = Fun className (if parentClassNameWithDot == "" then args else (Variable False "'" $ KTUserType $ init parentClassNameWithDot) : args) returnType ([firstPart] ++
+                [(Expression $ (CallFun ".set" ([Val $ KDRecord (translateVarListToEmptyRecord (fields $ cl0 `mappend` cl1))] ++ [Var "this"]) ))] ++
+                (getSetters constructorFields) ++
+                initPart ++
+                [(Expression $ (CallFun ".get" [Var "this"]))]) where
+                        translateVarListToEmptyRecord :: [Variable] -> [(String, KData, KType, Bool)]
+                        translateVarListToEmptyRecord ((Variable varMutable varName varType) : vs) = (varName, KDUndefined, varType, varMutable) : (translateVarListToEmptyRecord vs)
+                        translateVarListToEmptyRecord [] = []
+                        (Class _ _ ((Fun _ args returnType (firstPart:initPart)):mtds) _ ) = parentClassUpdated2
+                        getSetters :: [Variable] -> [FunPrimitive]
+                        getSetters [] = []
+                        getSetters ((Variable {..}): fds) = (Expression $ (CallFun ".set" [CallFun ".get" [Var varName], Var "this", Var varName])) : (getSetters fds)
+        let parentClassUpdated3 = Class parentName parentFields (newMethod : prevMethods) parentClasses where
+                (Class parentName parentFields (oldMethod : prevMethods) parentClasses) = parentClassUpdated2    
+        return (parentClassUpdated3, cl0 `mappend` cl1)
+
+parseClassNext :: Class -> String -> [Variable] -> Parser (Class,Class)
+parseClassNext parentClass@(Class {..}) fullClassName constructorFields = try (do 
+                                    fun <- parseFun 
+                                    let fun' = Fun funName (Variable True "this" (KTUserType fullClassName) : funArgs) funReturnType funBody where
+                                            Fun funName funArgs funReturnType funBody = fun
                                     -- do we really need this? funFixed <- return $ Fun (className ++ "." ++ (name (fun :: Fun))) (args (fun :: Fun)) (returnType (fun :: Fun)) (body (fun :: Fun)) --duplicate records does not infer types
-                                    cl1 <- return $ Class "" [] [thisFun] []
+                                    cl1 <- return $ Class "" [] [fun'] []
                                     separator
-                                    (parentClassUpdated, cl2) <- parseClassNext' parentClass className constructorFields
+                                    (parentClassUpdated, cl2) <- parseClassNext parentClass fullClassName constructorFields
                                     return (parentClassUpdated, cl1 `mappend` cl2)
                                 )
                             <|> try (do 
@@ -456,39 +430,29 @@ parseClassNext' parentClass@(Class {..}) className constructorFields = try (do
                                     let parentClassUpdated = (Class pName pFields (newConstructor:fs) pClasses) where
                                         (Class pName pFields ((Fun constrName constrArgs constrType constrBody):fs) pClasses) = parentClass
                                     separator
-                                    (parentClassUpdated2, cl2) <- parseClassNext parentClassUpdated className constructorFields
+                                    (parentClassUpdated2, cl2) <- parseClassNext parentClassUpdated fullClassName constructorFields
                                     return (parentClassUpdated2, cl2)
                                     )     
                         <|> try (do 
                                     val <- parseVariableVal
                                     cl1 <- return $ Class "" [val] [] []
                                     separator
-                                    (parentClassUpdated, cl2) <- parseClassNext' parentClass className constructorFields
+                                    (parentClassUpdated, cl2) <- parseClassNext parentClass fullClassName constructorFields
                                     return (parentClassUpdated, cl1 `mappend` cl2)
                                 )
                         <|> try (do 
                                     var <- parseVariableVar
                                     cl1 <- return $ Class "" [var] [] []
                                     separator
-                                    (parentClassUpdated, cl2) <- parseClassNext' parentClass className constructorFields
+                                    (parentClassUpdated, cl2) <- parseClassNext parentClass fullClassName constructorFields
                                     return (parentClassUpdated, cl1 `mappend` cl2)
                                 )
                         <|> try (do 
-                                    (classWithNewConstructors, cl) <- parseClass' $ Class className [] [] []
+                                    (classWithNewConstructors, cl) <- parseClass (Class (fullClassName ++ ".") [] [] []) (fullClassName ++ ".")
                                     cl1 <- return $ (Class "" [] [] [cl] `mappend` classWithNewConstructors)
                                     separator
-                                    (parentClassUpdated, cl2) <- parseClassNext' parentClass className constructorFields
+                                    (parentClassUpdated, cl2) <- parseClassNext parentClass fullClassName constructorFields
                                     return (parentClassUpdated, cl1 `mappend` cl2) 
                                 )    
                         <|> do 
                             return (parentClass, Class "" [] [] [])
-
-addOuterClass :: String -> String
-addOuterClass program = "class Main {\n" ++ program ++ " }"
-
-parseProgram :: Parser Class
-parseProgram = do
-                (none, result) <- (parseClass $ Class "parentOfAll" [] [] [])
-                return result
-    
- 

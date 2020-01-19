@@ -15,6 +15,6 @@ main :: IO ()
 main = do
     program <- readFile "test/test_program.kt"
     putStrLn $ addOuterClass $ removeComments program 0
-    ast <- return $ parse parseProgram "" $ addOuterClass $ removeComments program 0
+    ast <- return $ parse parseProgram "" $ removeComments program 0
     pPrint ast
     runProgram ast

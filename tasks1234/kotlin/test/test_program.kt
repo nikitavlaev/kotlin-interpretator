@@ -1,24 +1,38 @@
-var fib: Array<Int> /*= Array(4,{i -> i*i})*/
+class Person (val name: String) {
+    
+    val favoriteHat : Person.Hat
+    var age : Int
 
-class MyClass (var name: String, var age: Int) {
+    class Hat {}
+    
     init {
-        println("Constructor launched")
+        println(name + " was born!")
+        this.age = 0
     }
-    fun Bar() { /*add this */
-        println("Test passed")
+
+    fun buyNewFavoriteHat() {
+        println(this.name + " bought a new favorite hat.")
+        this.favoriteHat = this.Hat()
+    }
+
+    fun afterOneYear() {
+        println("Happy birthday, " + this.name + "!")
+        this.age = this.age + 1
     }
 }
 
 fun Main() {
-    val a = MyClass("name", 10)
+    val a = Person("Bob")
     a.age = 11
     println(a.age)
-    a.Bar()
-   /* fib = 0..10
-    var i = 2
-    while (i < 11) {
-        fib[i] = fib[i - 2] + fib[i - 1]
-        i = i + 1
-    }
-    println(fib)*/
+    a.buyNewFavoriteHat()
+    a.afterOneYear()
+    print(a.name + " is ")
+    print(a.age)
+    println(" years ago.")
+    a.afterOneYear()
+    print(a.name + " is ")
+    print(a.age)
+    println(" years ago.")
 }
+
