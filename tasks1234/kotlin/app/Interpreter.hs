@@ -136,9 +136,13 @@ interpretFunByName currentClass stack ('.' : name) (this : args) = do --ClassA.C
                                     _  -> descendInClasses cl stack cls funName args         
         _ -> return (KDError $ "Cannot override class " ++ show ktypeThis, KTUnknown, stack')
 
-interpretFunByName currentClass@(Class _ _ (f@(Fun nameFun argsFun typeFun bodyFun) : otherFuns) _) stack name args
-    | (nameFun == name) && (length argsFun == length args) = launchFun f stack args--TODO if args error then continue search
-    | otherwise = interpretFunByName (Class "" [] otherFuns []) stack name args
+interpretFunByName currentClass@(Class clName clFlds (f@(Fun nameFun argsFun typeFun bodyFun) : otherFuns) clCls) stack name args
+    | (nameFun == name) && (length argsFun == length args) = do
+        (kdatas, ktypes, stack') <- launchFun f stack args  
+        case kdatas of --if args types error then continue search
+            (KDError ('A':'r':'g':other)) -> interpretFunByName (Class clName clFlds otherFuns clCls) stack name args
+            _ -> return (kdatas, ktypes, stack')
+    | otherwise = interpretFunByName (Class clName clFlds otherFuns clCls) stack name args
 
 interpretFunByName (Class _ _ [] _) stack name args = return (KDError $ "Function " ++ name ++ " was not found", KTAny, stack)
 
