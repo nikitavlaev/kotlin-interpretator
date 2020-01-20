@@ -84,8 +84,39 @@ findClassByName targetName (curClass@(Class currentName _ _ _):cls)
     | otherwise = findClassByName targetName cls
 findClassByName targetName [] = Nothing
 
-interpretFunByName :: Class -> [InterObject] -> String -> [Expr] -> IO (KData, KType, [InterObject])
+launchFun :: Fun -> [InterObject] -> [Expr] -> IO (KData, KType, [InterObject])
+launchFun (Fun {..}) stack arguments = do 
+        (kdatas, ktypes, stack') <- {-trace name $-} interpretFunArgs stack arguments
+        let (kdatas', ktypes') = checkArgsTypes args kdatas ktypes where
+            checkArgsTypes :: [Variable] -> [KData] -> [KType] -> ([KData],[KType])
+            checkArgsTypes [] [] [] = ([], [])
+            checkArgsTypes ((Variable {..}) : prevArgs) (kdata : prevKdatas) (ktype : prevKtypes) = case dataConversionFromTypeToType kdata ktype varType of
+                KDError m -> ([KDError m], [KTUnknown])
+                kdata' -> let (kdatas', ktypes') = checkArgsTypes prevArgs prevKdatas prevKtypes in
+                    (kdata' : kdatas', varType : ktypes')
+        case kdatas' of
+            [KDError m] -> return (KDError $ "Arguments type mismatched in function " ++ name, KTUnknown, stack)
+            _ -> do
+                let argNames = varName <$> args
+                let argMutables = varMutable <$> args
+                let createVariable = (\(kdata', ktype', varName, varMutable, arg) -> InterVar varName ktype' kdata' False (if varMutable then Just arg else Nothing))
+                let argsToStackFormat = createVariable <$> (zip5 kdatas' ktypes' argNames argMutables arguments) where
+                    zip5 :: [a] -> [b] -> [c] -> [d] -> [e] -> [(a, b, c, d, e)]
+                    zip5 (a : as) (b : bs) (c : cs) (d : ds) (e : es) = (a, b, c, d, e) : zip5 as bs cs ds es
+                    zip5 [] [] [] [] [] = []
+                --pPrint $ Log "Name started function" name
+                --pPrint $ Log "Stack before working function" $ init stack'
+                (kdataResult, ktypeResult, stack'') <- interpretBlock (argsToStackFormat ++ [InterFun] ++ stack') body
+                let stack''' = deleteFun stack'' where
+                    deleteFun (InterFun : objs) = objs
+                    deleteFun (_ : objs) = deleteFun objs
+                --pPrint $ Log "Name ended function" nameS
+                --pPrint $ Log "Stack after working function" $ init stack'''
+                return $ case dataConversionFromTypeToType kdataResult ktypeResult returnType of
+                    KDError m -> trace ("Typecheck fail " ++ show returnType ++ show ktypeResult ++ show kdataResult) $ (KDError m, KTUnknown, stack''')
+                    kdataResult' -> (kdataResult', returnType, stack''')
 
+interpretFunByName :: Class -> [InterObject] -> String -> [Expr] -> IO (KData, KType, [InterObject])
 interpretFunByName currentClass stack ('.' : name) (this : args) = do --ClassA.ClassB.f()
     (kdataThis, ktypeThis, stack') <- interpretExpression stack this
     case ktypeThis of
@@ -105,37 +136,8 @@ interpretFunByName currentClass stack ('.' : name) (this : args) = do --ClassA.C
                                     _  -> descendInClasses cl stack cls funName args         
         _ -> return (KDError $ "Cannot override class " ++ show ktypeThis, KTUnknown, stack')
 
-interpretFunByName currentClass@(Class _ _ ((Fun nameFun argsFun typeFun bodyFun) : otherFuns) _) stack name args
-    | (nameFun == name) && (length argsFun == length args) = do
-        (kdatas, ktypes, stack') <- {-trace name $-} interpretFunArgs stack args
-        let (kdatas', ktypes') = checkArgsTypes argsFun kdatas ktypes where
-            checkArgsTypes :: [Variable] -> [KData] -> [KType] -> ([KData],[KType])
-            checkArgsTypes [] [] [] = ([], [])
-            checkArgsTypes ((Variable {..}) : prevArgsFun) (kdata : prevKdatas) (ktype : prevKtypes) = case dataConversionFromTypeToType kdata ktype varType of
-                KDError m -> ([KDError m], [KTUnknown])
-                kdata' -> let (kdatas', ktypes') = checkArgsTypes prevArgsFun prevKdatas prevKtypes in
-                    (kdata' : kdatas', varType : ktypes')
-        case kdatas' of
-            [KDError m] -> interpretFunByName (Class "" [] otherFuns []) stack' name args
-            _ -> do
-                let argNames = varName <$> argsFun
-                let argMutables = varMutable <$> argsFun
-                let createVariable = (\(kdata', ktype', varName, varMutable, arg) -> InterVar varName ktype' kdata' False (if varMutable then Just arg else Nothing))
-                let argsToStackFormat = createVariable <$> (zip5 kdatas' ktypes' argNames argMutables args) where
-                    zip5 :: [a] -> [b] -> [c] -> [d] -> [e] -> [(a, b, c, d, e)]
-                    zip5 (a : as) (b : bs) (c : cs) (d : ds) (e : es) = (a, b, c, d, e) : zip5 as bs cs ds es
-                    zip5 [] [] [] [] [] = []
-                --pPrint $ Log "Name started function" name
-                --pPrint $ Log "Stack before working function" $ init stack'
-                (kdataResult, ktypeResult, stack'') <- interpretBlock (argsToStackFormat ++ [InterFun] ++ stack') bodyFun
-                let stack''' = deleteFun stack'' where
-                    deleteFun (InterFun : objs) = objs
-                    deleteFun (_ : objs) = deleteFun objs
-                --pPrint $ Log "Name ended function" name
-                --pPrint $ Log "Stack after working function" $ init stack'''
-                return $ case dataConversionFromTypeToType kdataResult ktypeResult typeFun of
-                    KDError m -> trace ("Typecheck fail" ++ show typeFun ++ show ktypeResult ++ show kdataResult) $ (KDError m, KTUnknown, stack''')
-                    kdataResult' -> (kdataResult', typeFun, stack''')
+interpretFunByName currentClass@(Class _ _ (f@(Fun nameFun argsFun typeFun bodyFun) : otherFuns) _) stack name args
+    | (nameFun == name) && (length argsFun == length args) = launchFun f stack args--TODO if args error then continue search
     | otherwise = interpretFunByName (Class "" [] otherFuns []) stack name args
 
 interpretFunByName (Class _ _ [] _) stack name args = return (KDError $ "Function " ++ name ++ " was not found", KTAny, stack)
@@ -183,6 +185,14 @@ interpretFunPrimitive stack (While {..}) = do
                 _ -> interpretFunPrimitive stack'' (While cond body)
         KDBool False -> return (KDUndefined, KTUnknown, stack')
 
+createArrayByLambda :: String -> Integer -> [FunPrimitive] -> [InterObject] -> IO ([KData], KType)
+createArrayByLambda _ 0 body stack = return ([], KTAny)
+createArrayByLambda indexName size body stack = do
+    --we prohibit stack changes in lambdas --here maybe mistake with "index"?
+    (kdata, ktype, _ ) <- launchFun (Fun "Element" [Variable False indexName KTInt] KTAny body) stack [Val (KDInt (size - 1))]
+    (kdatas, ktypeOther) <- (createArrayByLambda indexName (size - 1) body stack)
+    return (kdata:kdatas, ktype)
+            
 interpretExpression :: [InterObject] -> Expr -> IO (KData, KType, [InterObject])
 interpretExpression stack (Val kdata) = return (kdata, autoInferenceTypeFromData kdata, stack)
 interpretExpression stack (CallFun {name = "print", args = [exprMessage]}) = do
@@ -202,6 +212,12 @@ interpretExpression stack (CallFun {name = "println", args = [exprMessage]}) = d
 interpretExpression stack (CallFun {name = "readLine", args = []}) = do
     inputStr <- getLine
     return (KDArray $ KDChar <$> inputStr, KTNullable $ KTArray KTChar, stack)
+
+interpretExpression stack (CallFun ".array" [Val (KDInt size), (Lambda ((Variable {..}):[]) body) ]) = do
+    (array, elementType) <- createArrayByLambda varName size body stack
+    return (KDArray (reverse array), KTArray elementType, stack)
+
+interpretExpression stack (CallFun ".array" _ ) = return (KDError "Illegal initial array arguments", KTUnknown, stack)
 
 interpretExpression stack (CallFun ".get" [Var "true"]) = return (KDBool True, KTBool, stack)
 interpretExpression stack (CallFun ".get" [Var "false"]) = return (KDBool False, KTBool, stack)

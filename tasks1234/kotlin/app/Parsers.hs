@@ -74,17 +74,49 @@ parseThrow = (:[]) <$>
                 spaces *>
                 (Exception <$> parseName)))
 
+parseLambda :: Parser Expr -- parse lambda in array constructor
+parseLambda = do 
+    char '{'
+    separator
+    parameters <- (separator *> (try parseOneFunParameter) <* separator) `sepBy` (char ',')
+    spaces
+    string "->"
+    separator
+    body <- concat <$> (separator *> customSepBy parseFunPrimitive semicolon <* (semicolon <|> separator))
+    separator
+    char '}' 
+    return $ Lambda parameters body
+
 parseAssignment :: Parser [FunPrimitive]
 parseAssignment = do 
     lvalue <- parseFunOrVar
     spaces
     char '='
     separator
-    rvalue <- parseOr
+    rvalue <- parseRValue
     case lvalue of
         CallFun ".get" ((Var nameObject) : fields) -> 
             return [Expression $ CallFun ".set" (rvalue : (Var nameObject) : fields)]
         _ -> fail "Cannot assign to rvalue"  
+
+parseArrayCtor :: Parser Expr
+parseArrayCtor = do 
+    --spaces
+    string "Array"
+    --generics
+    char '('
+    spaces
+    size <- parseInt --TODO : parseNumericValue?
+    spaces 
+    char ')'
+    spaces
+    lambda <- parseLambda
+    spaces
+    return $ CallFun ".array" [size, lambda]
+
+parseRValue :: Parser Expr
+parseRValue = try parseArrayCtor
+                <|> parseOr
 
 parseValue :: Parser Expr
 parseValue = try parseRange
@@ -262,7 +294,7 @@ parseWhile = ( : []) <$> (While <$> (string "while" *> spaces *> ((\expr -> Call
 parseVarInit :: Parser [FunPrimitive]
 parseVarInit = (string "var " *> spaces *> parseName) >>= (\varName ->
     (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTUnknown) >>= (\varType ->
-            (try (spaces *> char '=' *> spaces *> parseOr) >>= (\varInitValue ->
+            (try (spaces *> char '=' *> spaces *> parseRValue) >>= (\varInitValue ->
             return $ [VarInit varName varType, Expression (CallFun ".set" [varInitValue, Var varName])]
             ))
             <|>
@@ -273,7 +305,7 @@ parseVarInit = (string "var " *> spaces *> parseName) >>= (\varName ->
 parseValInit :: Parser [FunPrimitive]
 parseValInit = (string "val " *> spaces *> parseName) >>= (\valName ->
     (try (spaces *> char ':' *> spaces *> parseKType) <|> pure KTUnknown) >>= (\valType ->
-        (try (spaces *> char '=' *> spaces *> parseOr) >>= (\valInitValue ->
+        (try (spaces *> char '=' *> spaces *> parseRValue) >>= (\valInitValue ->
             return $ [ValInit valName valType, Expression (CallFun ".set" [valInitValue, Var valName])]
             )
         ) <|>
@@ -346,6 +378,7 @@ parseClassConstuctorFields = try (parseConstructorParams) <|> pure []
 
 parseProgram :: Parser Class
 parseProgram =  try (do 
+                        separator
                         fun <- parseFun
                         cl1 <- return $ Class "" [] [fun] []
                         separator
@@ -353,6 +386,7 @@ parseProgram =  try (do
                         return $ cl1 `mappend` cl2
                     )
             <|> try (do 
+                        separator
                         val <- parseVariableVal
                         cl1 <- return $ Class "" [val] [] []
                         separator
@@ -360,6 +394,7 @@ parseProgram =  try (do
                         return $ cl1 `mappend` cl2
                     )
             <|> try (do 
+                        separator
                         var <- parseVariableVar
                         cl1 <- return $ Class "" [var] [] []
                         separator
@@ -367,6 +402,7 @@ parseProgram =  try (do
                         return $ cl1 `mappend` cl2
                     )
             <|> try (do 
+                        separator
                         (classWithNewConstructors, cl) <- parseClass (Class "Main" [] [] []) ""
                         cl1 <- return $ (Class "" [] [] [cl] `mappend` classWithNewConstructors)
                         separator
@@ -374,6 +410,8 @@ parseProgram =  try (do
                         return $ cl1 `mappend` cl2
                     )    
             <|> do 
+                separator
+                eof
                 return $ Class "Main" [] [] []
 
 parseClass :: Class -> String -> Parser (Class, Class)
@@ -392,8 +430,6 @@ parseClass parentClass parentClassNameWithDot = do
         let parentClassUpdated = Class parentName parentFields (standardConstructor : parentMethods) parentClasses where
                 Class parentName parentFields parentMethods parentClasses = parentClass
         (parentClassUpdated2, cl1) <- parseClassNext parentClassUpdated (parentClassNameWithDot ++ className) constructorFields
-        separator
-        char '}'
         let newMethod = Fun className (if parentClassNameWithDot == "" then args else (Variable False "'" $ KTUserType $ init parentClassNameWithDot) : args) returnType ([firstPart] ++
                 [(Expression $ (CallFun ".set" ([Val $ KDRecord (translateVarListToEmptyRecord (fields $ cl0 `mappend` cl1))] ++ [Var "this"]) ))] ++
                 (getSetters constructorFields) ++
@@ -415,7 +451,6 @@ parseClassNext parentClass@(Class {..}) fullClassName constructorFields = try (d
                                     fun <- parseFun 
                                     let fun' = Fun funName (Variable True "this" (KTUserType fullClassName) : funArgs) funReturnType funBody where
                                             Fun funName funArgs funReturnType funBody = fun
-                                    -- do we really need this? funFixed <- return $ Fun (className ++ "." ++ (name (fun :: Fun))) (args (fun :: Fun)) (returnType (fun :: Fun)) (body (fun :: Fun)) --duplicate records does not infer types
                                     cl1 <- return $ Class "" [] [fun'] []
                                     separator
                                     (parentClassUpdated, cl2) <- parseClassNext parentClass fullClassName constructorFields
@@ -455,4 +490,6 @@ parseClassNext parentClass@(Class {..}) fullClassName constructorFields = try (d
                                     return (parentClassUpdated, cl1 `mappend` cl2) 
                                 )    
                         <|> do 
+                            separator
+                            char '}'
                             return (parentClass, Class "" [] [] [])

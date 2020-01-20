@@ -22,17 +22,19 @@ class Person (val name: String) {
 }
 
 fun Main() {
-    val a = Person("Bob")
+    val a = Array(10) {i -> i*2}
+    println(a[1])
+    /*val a = Person("Bob")
     a.age = 11
     println(a.age)
     a.buyNewFavoriteHat()
     a.afterOneYear()
     print(a.name + " is ")
     print(a.age)
-    println(" years ago.")
+    println(" years old.")
     a.afterOneYear()
     print(a.name + " is ")
     print(a.age)
-    println(" years ago.")
+    println(" years old.")*/
 }
 
