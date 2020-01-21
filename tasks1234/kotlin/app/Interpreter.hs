@@ -96,7 +96,7 @@ launchFun (Fun {..}) stack arguments = do
             checkArgsTypes ((Variable {..}) : prevArgs) (kdata : prevKdatas) (ktype : prevKtypes) = case dataConversionFromTypeToType kdata ktype varType of
                 KDError m -> ([KDError m], [KTUnknown])
                 kdata' -> let (kdatas', ktypes') = checkArgsTypes prevArgs prevKdatas prevKtypes in
-                    (kdata' : kdatas', varType : ktypes')
+                    (kdata' : kdatas', ktype : ktypes')
         case kdatas' of
             [KDError m] -> return (KDError $ "Arguments type mismatched in function " ++ name, KTUnknown, stack)
             _ -> do
