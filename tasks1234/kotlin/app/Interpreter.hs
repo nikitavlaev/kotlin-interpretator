@@ -117,7 +117,7 @@ launchFun (Fun {..}) stack arguments = do
                 --pPrint $ Log "Stack after working function" $ init stack'''
                 return $ case dataConversionFromTypeToType kdataResult ktypeResult returnType of
                     KDError m -> trace ("Typecheck fail " ++ name ++ " " ++ show returnType ++ " " ++ show ktypeResult ++ " " ++ show kdataResult) $ (KDError m, KTUnknown, stack''')
-                    kdataResult' -> (kdataResult', returnType, stack''')
+                    kdataResult' -> (kdataResult', ktypeResult, stack''')
 
 interpretFunByName :: Class -> [InterObject] -> String -> [Expr] -> IO (KData, KType, [InterObject])
 interpretFunByName currentClass stack ('.' : name) (this : args) = do --ClassA.ClassB.f()
