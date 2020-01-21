@@ -33,6 +33,7 @@ dataConversionFromTypeToType KDNull (KTNullable _) (KTNullable _) = KDNull
 dataConversionFromTypeToType kdata (KTNullable ktype1) (KTNullable ktype2) = dataConversionFromTypeToType kdata ktype1 ktype2
 dataConversionFromTypeToType kdata ktype1 (KTNullable ktype2) = dataConversionFromTypeToType kdata ktype1 ktype2
 dataConversionFromTypeToType kdata ktype1 KTAny = kdata
+dataConversionFromTypeToType kdata KTAny ktype2 = kdata
 dataConversionFromTypeToType kdata ktype1 KTUnit = KDUnit
 dataConversionFromTypeToType (KDArray []) (KTArray ktype1) (KTArray ktype2) = KDArray []
 dataConversionFromTypeToType (KDArray (kdata : kdatas)) (KTArray ktype1) (KTArray ktype2) = case dataConversionFromTypeToType kdata ktype1 ktype2 of
@@ -47,6 +48,7 @@ dataConversionFromTypeToType kdata ktype1 ktype2 = KDError $ show kdata ++ " can
 
 autoInferenceTypeFromData :: KData -> KType
 autoInferenceTypeFromData KDUnit = KTUnit
+autoInferenceTypeFromData KDObject = KTAny
 autoInferenceTypeFromData KDNull = KTNullable KTAny
 autoInferenceTypeFromData (KDBool _) = KTBool
 autoInferenceTypeFromData (KDChar _) = KTChar
@@ -113,7 +115,7 @@ launchFun (Fun {..}) stack arguments = do
                 --pPrint $ Log "Name ended function" nameS
                 --pPrint $ Log "Stack after working function" $ init stack'''
                 return $ case dataConversionFromTypeToType kdataResult ktypeResult returnType of
-                    KDError m -> trace ("Typecheck fail " ++ show returnType ++ show ktypeResult ++ show kdataResult) $ (KDError m, KTUnknown, stack''')
+                    KDError m -> trace ("Typecheck fail " ++ show returnType ++ " " ++ show ktypeResult ++ " " ++ show kdataResult) $ (KDError m, KTUnknown, stack''')
                     kdataResult' -> (kdataResult', returnType, stack''')
 
 interpretFunByName :: Class -> [InterObject] -> String -> [Expr] -> IO (KData, KType, [InterObject])
@@ -144,7 +146,8 @@ interpretFunByName currentClass@(Class clName clFlds (f@(Fun nameFun argsFun typ
             _ -> return (kdatas, ktypes, stack')
     | otherwise = interpretFunByName (Class clName clFlds otherFuns clCls) stack name args
 
-interpretFunByName (Class _ _ [] _) stack name args = return (KDError $ "Function " ++ name ++ " was not found", KTAny, stack)
+interpretFunByName (Class _ _ [] _) stack name (arg:args) = return (KDError $ "Function " ++ name ++ " was not found, arg :: " ++ show arg, KTAny, stack)
+interpretFunByName (Class _ _ [] _) stack name _ = return (KDError $ "Function " ++ name ++ " was not found", KTAny, stack)
 
 interpretFunArgs :: [InterObject] -> [Expr] -> IO ([KData], [KType], [InterObject])
 interpretFunArgs stack (arg:args) = do
@@ -291,7 +294,7 @@ interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields))
                             return $ case kdataRes of
                                 KDError _ -> (kdataRes, KTUnknown, stack')
                                 _ -> (KDRecord ((fieldNameOldVar, kdataRes, ktypeRes, fieldCanModifyOldVar) : fieldsOldVar), KTUserType nameUserType, stack')
-                        | (fieldNameOldVar == fieldName) = trace (show $ length fieldsOldVar) $ return (KDError $ "Cannot assign a new value to the val-field " ++ fieldName, KTUnknown, stack)
+                        | (fieldNameOldVar == fieldName) = return (KDError $ "Cannot assign a new value to the val-field " ++ fieldName, KTUnknown, stack)
                         | otherwise = do
                             (kdataRes, ktypeRes, stack') <- helperSet stack (KDRecord fieldsOldVar) (KTUserType nameUserType) ((Var fieldName) : fields) kdataNewVal ktypeNewVal
                             return $ case kdataRes of

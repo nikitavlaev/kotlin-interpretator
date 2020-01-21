@@ -7,6 +7,7 @@ import Data.Functor.Identity
 import Text.Parsec hiding (spaces)
 import Data.Functor.Identity
 import Control.Monad
+import Debug.Trace
 
 type Parser = Parsec String ()
 
@@ -74,18 +75,25 @@ parseThrow = (:[]) <$>
                 spaces *>
                 (Exception <$> parseName)))
 
+parseLambdaParams :: Parser [Variable]
+parseLambdaParams = try (do 
+                        parameters <- (separator *> (try parseOneFunParameter) <* separator) `sepBy` (char ',')
+                        spaces
+                        string "->"
+                        return parameters
+                        )
+                    <|> return []    
+
 parseLambda :: Parser Expr -- parse lambda in array constructor
 parseLambda = do 
     char '{'
     separator
-    parameters <- (separator *> (try parseOneFunParameter) <* separator) `sepBy` (char ',')
-    spaces
-    string "->"
+    params <- parseLambdaParams
     separator
     body <- concat <$> (separator *> customSepBy parseFunPrimitive semicolon <* (semicolon <|> separator))
     separator
     char '}' 
-    return $ Lambda parameters body
+    return $ Lambda params body
 
 parseAssignment :: Parser [FunPrimitive]
 parseAssignment = do 
@@ -99,11 +107,9 @@ parseAssignment = do
             return [Expression $ CallFun ".set" (rvalue : (Var nameObject) : fields)]
         _ -> fail "Cannot assign to rvalue"  
 
-parseArrayCtor :: Parser Expr
-parseArrayCtor = do 
-    --spaces
+parseArrayLambdaCtor :: Parser Expr
+parseArrayLambdaCtor = do 
     string "Array"
-    --generics
     char '('
     spaces
     size <- parseInt --TODO : parseNumericValue?
@@ -114,8 +120,22 @@ parseArrayCtor = do
     spaces
     return $ CallFun ".array" [size, lambda]
 
+{-parseArrayEmptyCtor :: Parser Expr
+parseArrayEmptyCtor = do 
+    string "Array"
+    char '('
+    spaces
+    size <- parseInt --TODO : parseNumericValue?
+    spaces 
+    char ')'
+    spaces
+    lambda <- parseLambda
+    spaces
+    return $ CallFun ".array" [size, lambda]    -}
+
 parseRValue :: Parser Expr
-parseRValue = try parseArrayCtor
+parseRValue = try parseArrayLambdaCtor
+                -- <|> try parseArrayEmptyCtor
                 <|> parseOr
 
 parseValue :: Parser Expr
@@ -274,6 +294,10 @@ parseKTypeName = try (do
                     string "Unit"
                     return KTUnit
                     ) 
+            <|> try (do
+                     string "Object"
+                     return KTAny 
+                    )        
             <|> do 
                 typeName <- parseNameWithDot
                 return $ KTUserType typeName
@@ -412,7 +436,9 @@ parseProgram =  try (do
             <|> do 
                 separator
                 eof
-                return $ Class "Main" [] [] []
+                --adding Object constructor here
+                let objFun = Fun "Object" [] KTAny [Expression $ (CallFun ".get" [Val $ KDObject])]
+                return $ Class "Main" [] [objFun] []
 
 parseClass :: Class -> String -> Parser (Class, Class)
 parseClass parentClass parentClassNameWithDot = do
@@ -425,23 +451,28 @@ parseClass parentClass parentClassNameWithDot = do
         char '{'
         separator
         cl0 <- return $ Class className constructorFields [] []
-        let standardConstructor = Fun className notModifyConstructorFields (KTUserType className) [VarInit "this" (KTUserType $ parentClassNameWithDot ++ className)] where
-                notModifyConstructorFields = (\(Variable _ varName varType) -> Variable False varName varType) <$> constructorFields
+        let standardConstructor = Fun className 
+                                      unmodifiedConstructorFields
+                                      (KTUserType className) 
+                                      [VarInit "this" (KTUserType $ parentClassNameWithDot ++ className)] where
+                                        unmodifiedConstructorFields = (\(Variable _ varName varType) -> Variable False varName varType) <$> constructorFields
         let parentClassUpdated = Class parentName parentFields (standardConstructor : parentMethods) parentClasses where
                 Class parentName parentFields parentMethods parentClasses = parentClass
         (parentClassUpdated2, cl1) <- parseClassNext parentClassUpdated (parentClassNameWithDot ++ className) constructorFields
-        let newMethod = Fun className (if parentClassNameWithDot == "" then args else (Variable False "'" $ KTUserType $ init parentClassNameWithDot) : args) returnType ([firstPart] ++
-                [(Expression $ (CallFun ".set" ([Val $ KDRecord (translateVarListToEmptyRecord (fields $ cl0 `mappend` cl1))] ++ [Var "this"]) ))] ++
-                (getSetters constructorFields) ++
-                initPart ++
-                [(Expression $ (CallFun ".get" [Var "this"]))]) where
-                        translateVarListToEmptyRecord :: [Variable] -> [(String, KData, KType, Bool)]
-                        translateVarListToEmptyRecord ((Variable varMutable varName varType) : vs) = (varName, KDUndefined, varType, varMutable) : (translateVarListToEmptyRecord vs)
-                        translateVarListToEmptyRecord [] = []
-                        (Class _ _ ((Fun _ args returnType (firstPart:initPart)):mtds) _ ) = parentClassUpdated2
-                        getSetters :: [Variable] -> [FunPrimitive]
-                        getSetters [] = []
-                        getSetters ((Variable {..}): fds) = (Expression $ (CallFun ".set" [CallFun ".get" [Var varName], Var "this", Var varName])) : (getSetters fds)
+        let newMethod = Fun className 
+                            (if parentClassNameWithDot == "" then args else (Variable False "'" $ KTUserType $ init parentClassNameWithDot) : args)
+                            returnType ([firstPart] ++
+                                        [(Expression $ (CallFun ".set" ([Val $ KDRecord (translateVarListToEmptyRecord (fields $ cl0 `mappend` cl1))] ++ [Var "this"]) ))] ++
+                                        (getSetters constructorFields) ++
+                                        initPart ++
+                                        [(Expression $ (CallFun ".get" [Var "this"]))]) where
+                                                translateVarListToEmptyRecord :: [Variable] -> [(String, KData, KType, Bool)]
+                                                translateVarListToEmptyRecord ((Variable varMutable varName varType) : vs) = (varName, KDUndefined, varType, varMutable) : (translateVarListToEmptyRecord vs)
+                                                translateVarListToEmptyRecord [] = []
+                                                (Class _ _ ((Fun _ args returnType (firstPart:initPart)):mtds) _ ) = parentClassUpdated2
+                                                getSetters :: [Variable] -> [FunPrimitive]
+                                                getSetters [] = []
+                                                getSetters ((Variable {..}): fds) = (Expression $ (CallFun ".set" [CallFun ".get" [Var varName], Var "this", Var varName])) : (getSetters fds)
         let parentClassUpdated3 = Class parentName parentFields (newMethod : prevMethods) parentClasses where
                 (Class parentName parentFields (oldMethod : prevMethods) parentClasses) = parentClassUpdated2    
         return (parentClassUpdated3, cl0 `mappend` cl1)

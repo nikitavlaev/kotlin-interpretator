@@ -90,11 +90,13 @@ data KData = KDUnit
     | KDArray [KData]
     | KDRecord [(String, KData, KType, Bool)] -- name, data, type, canModify
     | KDUndefined
+    | KDObject
     | KDError String
 
 instance Show KData where
     show KDUnit = "unit"
     show KDNull = "null"
+    show KDObject = "object"
     show (KDBool True) = "true"
     show (KDBool False) = "false"
     show (KDChar c) = [c]

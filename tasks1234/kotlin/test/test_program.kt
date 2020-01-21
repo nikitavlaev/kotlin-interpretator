@@ -1,40 +1,11 @@
-class Person (val name: String) {
-    
-    val favoriteHat : Person.Hat
-    var age : Int
-
-    class Hat {}
-    
-    init {
-        println(name + " was born!")
-        this.age = 0
-    }
-
-    fun buyNewFavoriteHat() {
-        println(this.name + " bought a new favorite hat.")
-        this.favoriteHat = this.Hat()
-    }
-
-    fun afterOneYear() {
-        println("Happy birthday, " + this.name + "!")
-        this.age = this.age + 1
-    }
+fun f(arr:Array<Object>) : Array<Object> {
+    arr[0] = "asdf"
+    arr
 }
 
 fun Main() {
-    val a = Array(10) {i -> i*2}
-    println(a[1])
-    /*val a = Person("Bob")
-    a.age = 11
-    println(a.age)
-    a.buyNewFavoriteHat()
-    a.afterOneYear()
-    print(a.name + " is ")
-    print(a.age)
-    println(" years old.")
-    a.afterOneYear()
-    print(a.name + " is ")
-    print(a.age)
-    println(" years old.")*/
+    var a = Array(10) {i -> Object()}
+    a = f(a)
+    println(a[0])
 }
 
