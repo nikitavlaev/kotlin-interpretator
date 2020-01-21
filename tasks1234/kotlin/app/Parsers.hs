@@ -295,7 +295,7 @@ parseKTypeName = try (do
                     return KTUnit
                     ) 
             <|> try (do
-                     string "Object"
+                     string "Any"
                      return KTAny 
                     )        
             <|> do 
@@ -437,8 +437,8 @@ parseProgram =  try (do
                 separator
                 eof
                 --adding Object constructor here
-                let objFun = Fun "Object" [] KTAny [Expression $ (CallFun ".get" [Val $ KDObject])]
-                return $ Class "Main" [] [objFun] []
+                let anyFun = Fun "Any" [] KTAny [Expression $ (CallFun ".get" [Val $ KDAny])]
+                return $ Class "Main" [] [anyFun] []
 
 parseClass :: Class -> String -> Parser (Class, Class)
 parseClass parentClass parentClassNameWithDot = do

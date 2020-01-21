@@ -49,7 +49,7 @@ dataConversionFromTypeToType kdata ktype1 ktype2 = KDError $ show kdata ++ " can
 
 autoInferenceTypeFromData :: KData -> KType
 autoInferenceTypeFromData KDUnit = KTUnit
-autoInferenceTypeFromData KDObject = KTAny
+autoInferenceTypeFromData KDAny = KTAny
 autoInferenceTypeFromData KDNull = KTNullable KTAny
 autoInferenceTypeFromData (KDBool _) = KTBool
 autoInferenceTypeFromData (KDChar _) = KTChar
