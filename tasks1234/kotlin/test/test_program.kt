@@ -3,7 +3,7 @@ fun f(arr:Array<Any>) {
 }
 
 fun Main() {
-    var a = Array(10) {i -> 2}
+    var a = Array(10) {i -> i + 2}
     f(a)
     println(a[0])
 }
