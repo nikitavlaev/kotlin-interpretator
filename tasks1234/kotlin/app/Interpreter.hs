@@ -349,20 +349,20 @@ interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields))
                         case var of
                             (Just (InterVar {..})) -> do
                                 let stackHead = reverse revStackHead
-                                (KDUnit, KTUnknown, newStackTail) <- case connectedVariable of
-                                    Nothing -> return (KDUnit, KTUnknown, stackTail)
+                                (KDUndefined, KTUnknown, newStackTail) <- case connectedVariable of
+                                    Nothing -> return (KDUndefined, KTUnknown, stackTail)
                                     Just (CallFun ".get" ((Var varName') : fields')) -> do
                                         let (revStackHead', stackTail') = splitStackByInterFun stackTail
                                         (kdataSet, ktypeSet, newStackTail') <- interSet stackTail' stackTail' varName' (fields' ++ fields) kdataNewVal ktypeNewVal
                                         case kdataSet of
                                             KDUndefined -> return ()
                                             _ -> pPrint $ Log "Error" kdataSet
-                                        return (KDUnit, KTUnknown, reverse revStackHead' ++ [InterFun] ++ newStackTail')
+                                        return (KDUndefined, KTUnknown, reverse revStackHead' ++ [InterFun] ++ newStackTail')
                                 case ktype of
-                                    KTUnknown -> return (KDUnit, KTUnknown, stackHead ++ ((InterVar name varKType varKData canModify connectedVariable) : newStackTail))
+                                    KTUnknown -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name varKType varKData canModify connectedVariable) : newStackTail))
                                     _ -> case dataConversionFromTypeToType varKData varKType ktype of
                                             KDError m -> return (KDError m, KTUnknown, [])
-                                            kdataRes -> return (KDUnit, KTUnknown, stackHead ++ ((InterVar name ktype kdataRes canModify connectedVariable) : newStackTail))
+                                            kdataRes -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name ktype kdataRes canModify connectedVariable) : newStackTail))
                             Nothing -> return (KDError $ "Variable " ++ varName ++ " was not found", KTUnknown, [])
  
         --skip all non-variables
