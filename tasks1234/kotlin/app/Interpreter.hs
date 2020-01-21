@@ -35,6 +35,7 @@ dataConversionFromTypeToType kdata ktype1 (KTNullable ktype2) = dataConversionFr
 dataConversionFromTypeToType kdata ktype1 KTAny = kdata
 dataConversionFromTypeToType kdata KTAny ktype2 = kdata
 dataConversionFromTypeToType kdata ktype1 KTUnit = KDUnit
+dataConversionFromTypeToType kdata KTUnit ktype2 = KDUnit
 dataConversionFromTypeToType (KDArray []) (KTArray ktype1) (KTArray ktype2) = KDArray []
 dataConversionFromTypeToType (KDArray (kdata : kdatas)) (KTArray ktype1) (KTArray ktype2) = case dataConversionFromTypeToType kdata ktype1 ktype2 of
     KDError m -> KDError m
