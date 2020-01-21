@@ -107,14 +107,16 @@ launchFun (Fun {..}) stack arguments = do
                     zip5 :: [a] -> [b] -> [c] -> [d] -> [e] -> [(a, b, c, d, e)]
                     zip5 (a : as) (b : bs) (c : cs) (d : ds) (e : es) = (a, b, c, d, e) : zip5 as bs cs ds es
                     zip5 [] [] [] [] [] = []
-                --pPrint $ Log "Name started function" name
-                --pPrint $ Log "Stack before working function" $ init stack'
+                pPrint $ Log "Name started function" name
+                pPrint $ Log "Stack before working function" $ init stack'
                 (kdataResult, ktypeResult, stack'') <- interpretBlock (argsToStackFormat ++ [InterFun] ++ stack') body
+                pPrint $ Log ("kdataResult in function" ++ name) $ kdataResult
+                pPrint $ Log ("ktypeResult in function" ++ name) $ ktypeResult
                 let stack''' = deleteFun stack'' where
                     deleteFun (InterFun : objs) = objs
                     deleteFun (_ : objs) = deleteFun objs
-                --pPrint $ Log "Name ended function" nameS
-                --pPrint $ Log "Stack after working function" $ init stack'''
+                pPrint $ Log "Name ended function" name
+                pPrint $ Log "Stack after working function" $ init stack'''
                 return $ case dataConversionFromTypeToType kdataResult ktypeResult returnType of
                     KDError m -> trace ("Typecheck fail " ++ name ++ " " ++ show returnType ++ " " ++ show ktypeResult ++ " " ++ show kdataResult) $ (KDError m, KTUnknown, stack''')
                     kdataResult' -> (kdataResult', returnType, stack''')
@@ -162,14 +164,14 @@ interpretBlock stack = interBlock (InterBlock : stack) where
     deleteBlock (InterBlock : objs) = objs
     deleteBlock (_ : objs) = deleteBlock objs
     interBlock stack [fp] = do
-        --pPrint $ Log "Stack" $ init stack
-        --pPrint $ Log "Action" fp
+        pPrint $ Log "Stack" $ init stack
+        pPrint $ Log "Action" fp
         (kdata, ktype, stack') <- interpretFunPrimitive stack fp
-        --pPrint $ Log "Stack" $ init stack'
+        pPrint $ Log "Stack" $ init stack'
         return (kdata, ktype, deleteBlock stack')
     interBlock stack (fp:fps) = do
-        --pPrint $ Log "Stack" $ init stack
-        --pPrint $ Log "Action" fp
+        pPrint $ Log "Stack" $ init stack
+        pPrint $ Log "Action" fp
         (kdata, ktype, stack') <- interpretFunPrimitive stack fp
         case kdata of
             KDError m -> return (kdata, ktype, deleteBlock stack')
@@ -193,13 +195,30 @@ interpretFunPrimitive stack (While {..}) = do
                 _ -> interpretFunPrimitive stack'' (While cond body)
         KDBool False -> return (KDUndefined, KTUnknown, stack')
 
-createArrayByLambda :: String -> Integer -> [FunPrimitive] -> [InterObject] -> IO ([KData], KType)
-createArrayByLambda _ 0 body stack = return ([], KTAny)
-createArrayByLambda indexName size body stack = do
-    --we prohibit stack changes in lambdas --here maybe mistake with "index"?
-    (kdata, ktype, _ ) <- launchFun (Fun "Element" [Variable False indexName KTInt] KTAny body) stack [Val (KDInt (size - 1))]
-    (kdatas, ktypeOther) <- (createArrayByLambda indexName (size - 1) body stack)
-    return (kdata:kdatas, ktype)
+createArrayByLambda :: String -> Integer -> Integer -> [FunPrimitive] -> [InterObject] -> KType -> IO (KData, KType, [InterObject])
+createArrayByLambda indexName size index body stack ktypeElement
+    | index == size = return (KDArray [], KTArray KTAny, stack)
+    | index == 0 = do
+        --we prohibit stack changes in lambdas --here maybe mistake with "index"?
+        (kdata, ktype, stack') <- interpretBlock ([InterVar indexName KTInt (KDInt index) False Nothing] ++ stack) body
+        -- now all element of array will have same type (type of first element)
+        -- in createArrayByLambda passed (tail stack') because first element in stack' is (InterVar indexName ...) and
+        -- it is not needed for later work
+        resultCreateTailArray <- createArrayByLambda indexName size (index + 1) body (tail stack') ktype
+        case resultCreateTailArray of
+            (KDError m, KTUnknown, stack'') -> return (KDError m, KTUnknown, stack'')
+            -- if index == size - 1 then ktypeOther == KTAny else ktypeOther == ktype
+            (KDArray kdatas, KTArray ktypeOther, stack'') -> return (KDArray $ kdata : kdatas, KTArray ktype, stack'')
+    | otherwise = do
+        (kdata, ktype, stack') <- launchFun (Fun "Element" [Variable False indexName KTInt] ktypeElement body) stack [Val (KDInt index)]
+        pPrint $ Log "index" $ index
+        pPrint $ Log "kdata" $ kdata
+        pPrint $ Log "ktype" $ ktype
+        resultCreateTailArray <- createArrayByLambda indexName size (index + 1) body stack' ktypeElement
+        case resultCreateTailArray of
+            (KDError m, KTUnknown, stack'') -> return (KDError m, KTUnknown, stack'')
+            -- if index == size - 1 then ktypeOther == KTAny else ktypeOther == ktypeElement
+            (KDArray kdatas, KTArray ktypeOther, stack'') -> return (KDArray $ kdata : kdatas, KTArray ktypeElement, stack'')
             
 interpretExpression :: [InterObject] -> Expr -> IO (KData, KType, [InterObject])
 interpretExpression stack (Val kdata) = return (kdata, autoInferenceTypeFromData kdata, stack)
@@ -221,9 +240,7 @@ interpretExpression stack (CallFun {name = "readLine", args = []}) = do
     inputStr <- getLine
     return (KDArray $ KDChar <$> inputStr, KTNullable $ KTArray KTChar, stack)
 
-interpretExpression stack (CallFun ".array" [Val (KDInt size), (Lambda ((Variable {..}):[]) body) ]) = do
-    (array, elementType) <- createArrayByLambda varName size body stack
-    return (KDArray (reverse array), KTArray elementType, stack)
+interpretExpression stack (CallFun ".array" [Val (KDInt size), (Lambda ((Variable {..}):[]) body) ]) = createArrayByLambda varName size 0 body stack KTUnknown
 
 interpretExpression stack (CallFun ".array" _ ) = return (KDError "Illegal initial array arguments", KTUnknown, stack)
 
