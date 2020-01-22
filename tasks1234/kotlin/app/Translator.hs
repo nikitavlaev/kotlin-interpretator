@@ -1,3 +1,5 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+module Translator where
 type Byte = Int -- single byte number
 type Short = Int -- double byte number
 type Long = Integer -- eight byte number
@@ -195,7 +197,7 @@ data Instruction =
     | Nop
     | Pop
     | Pop2
-    | Putfield {index :: Short]
+    | Putfield {index :: Short}
     | Putstatic {index :: Short}
     | Ret {index :: Byte}
     | Return
@@ -213,15 +215,15 @@ data Constant =
     | CDouble Double
     | CUtf8 String
     | CString String
-    | CNameAndType CUtf8 CUtf8
+    {-| CNameAndType CUtf8 CUtf8
     | CClass CUtf8
     | CFieldref CClass CNameAndType
     | CMethodref CClass CNameAndType
-    | CInterfaceMethodref CClass CNameAndType
+    | CInterfaceMethodref CClass CNameAndType-}
 
 type ConstantPool = [Constant]
 
-data Class = {
+data Class = Class {
         constantPool :: ConstantPool,
         thisClass :: Int, -- index from constantPool
         superClass :: Int, -- index from constantPool
@@ -232,10 +234,10 @@ data Class = {
         attributes :: [Attribute]
     }
 
-data Method = {
+data Method = Method {
         thisMethod :: Int, -- index from constantPool
-        flags :: [Flag]
-        code :: [Instrution]
+        flags :: [Flag],
+        code :: [Instruction]
     }
 
 data Interface --TODO

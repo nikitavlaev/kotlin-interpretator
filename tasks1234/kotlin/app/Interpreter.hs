@@ -6,6 +6,7 @@
 module Interpreter where
 import Ast
 import Text.Pretty.Simple (pPrint)
+import Data.List
 import Data.List.Split
 import Debug.Trace
 
@@ -46,7 +47,7 @@ dataConversionFromTypeToType (KDInt 0) _ KTBool = KDBool False
 dataConversionFromTypeToType (KDInt x) _ KTBool = KDBool True
 dataConversionFromTypeToType r@(KDRecord _) (KTUserType typeName) other = r
 dataConversionFromTypeToType r@(KDRecord _) other (KTUserType typeName) = r
-dataConversionFromTypeToType kdata ktype1 ktype2 = KDError $ show kdata ++ " cannot conversion from type " ++ show ktype1 ++ " to type " ++ show ktype2
+dataConversionFromTypeToType kdata ktype1 ktype2 = KDError $ show kdata ++ ": cannot convert from type " ++ show ktype1 ++ " to type " ++ show ktype2
 
 autoInferenceTypeFromData :: KData -> KType
 autoInferenceTypeFromData = \case
@@ -83,12 +84,6 @@ interpretProgram program =
         putStrLn $ "\n\nError: Function Main returned " ++ show kdata ++ " of type " ++ show ktype ++ ", but was expected unit"
         return ())
 
-findClassByName :: String -> [Class] -> Maybe Class
-findClassByName targetName (curClass@(Class currentName _ _ _):cls)
-    | (targetName == currentName) = return curClass
-    | otherwise = findClassByName targetName cls
-findClassByName targetName [] = Nothing
-
 launchFun :: Fun -> [InterObject] -> [Expr] -> IO (KData, KType, [InterObject])
 launchFun (Fun {..}) stack arguments = do 
         (kdatas, ktypes, stack') <- {-trace name $-} interpretFunArgs stack arguments
@@ -120,7 +115,9 @@ launchFun (Fun {..}) stack arguments = do
                 --pPrint $ Log "Name ended function" name
                 --pPrint $ Log "Stack after working function" $ init stack'''
                 return $ case dataConversionFromTypeToType kdataResult ktypeResult returnType of
-                    KDError m -> trace ("Typecheck fail " ++ name ++ " " ++ show returnType ++ " " ++ show ktypeResult ++ " " ++ show kdataResult) $ (KDError m, KTUnknown, stack''')
+                    KDError m -> (KDError $ "Typecheck fail in " ++ name ++ 
+                                    " between " ++ show returnType ++ " and " ++ show ktypeResult ++ " " ++ "\n       " 
+                                    ++ m, KTUnknown, stack''')
                     kdataResult' -> (kdataResult', ktypeResult, stack''')
 
 interpretFunByName :: Class -> [InterObject] -> String -> [Expr] -> IO (KData, KType, [InterObject])
@@ -135,7 +132,7 @@ interpretFunByName currentClass stack ('.' : name) (this : args) = do --ClassA.C
                     case subTypes of
                         [] -> return (KDError $ "Empty name of user type", KTUnknown, stack)
                         (className:cls) -> do
-                            let targetClass = findClassByName className (classes currentClass)
+                            let targetClass = find (\(Class name _ _ _ ) -> name == className) (classes currentClass)
                             case targetClass of
                                 Nothing -> return (KDError $ "No such class " ++ className, KTUnknown, stack)
                                 (Just cl) -> case cls of
