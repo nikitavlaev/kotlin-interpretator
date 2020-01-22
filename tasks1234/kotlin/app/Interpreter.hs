@@ -241,6 +241,8 @@ interpretExpression stack (CallFun {name = "readLine", args = []}) = do
     inputStr <- getLine
     return (KDArray $ KDChar <$> inputStr, KTNullable $ KTArray KTChar, stack)
 
+interpretExpression stack (CallFun "Object" []) = return (KDAny, KTAny, stack)
+
 interpretExpression stack (CallFun ".array" [Val (KDInt size), (Lambda ((Variable {..}):[]) body) ]) = createArrayByLambda varName size 0 body stack KTUnknown
 
 interpretExpression stack (CallFun ".array" _ ) = return (KDError "Illegal initial array arguments", KTUnknown, stack)
