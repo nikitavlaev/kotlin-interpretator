@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# OPTIONS_GHC -fwarn-incomplete-patterns -fwarn-incomplete-uni-patterns #-}
 
@@ -48,18 +49,19 @@ dataConversionFromTypeToType r@(KDRecord _) other (KTUserType typeName) = r
 dataConversionFromTypeToType kdata ktype1 ktype2 = KDError $ show kdata ++ " cannot conversion from type " ++ show ktype1 ++ " to type " ++ show ktype2
 
 autoInferenceTypeFromData :: KData -> KType
-autoInferenceTypeFromData KDUnit = KTUnit
-autoInferenceTypeFromData KDAny = KTAny
-autoInferenceTypeFromData KDNull = KTNullable KTAny
-autoInferenceTypeFromData (KDBool _) = KTBool
-autoInferenceTypeFromData (KDChar _) = KTChar
-autoInferenceTypeFromData (KDInt _) = KTInt
-autoInferenceTypeFromData (KDDouble _) = KTDouble
-autoInferenceTypeFromData (KDArray []) = KTArray KTAny
-autoInferenceTypeFromData (KDArray (obj : objs)) = KTArray $ autoInferenceTypeFromData obj
-autoInferenceTypeFromData KDUndefined = KTUnknown
-autoInferenceTypeFromData (KDError _) = KTUnknown
-autoInferenceTypeFromData (KDRecord _) = KTUserType "Unknown user type"
+autoInferenceTypeFromData = \case
+    KDUnit -> KTUnit
+    KDAny -> KTAny
+    KDNull -> KTNullable KTAny
+    (KDBool _) -> KTBool
+    (KDChar _) -> KTChar
+    (KDInt _) -> KTInt
+    (KDDouble _) -> KTDouble
+    (KDArray []) -> KTArray KTAny
+    (KDArray (obj : objs)) -> KTArray $ autoInferenceTypeFromData obj
+    KDUndefined -> KTUnknown
+    (KDError _) -> KTUnknown
+    (KDRecord _) -> KTUserType "Unknown user type"
 
 setupProgramStack :: Class -> [InterObject]
 setupProgramStack program = ((\(Variable {..}) -> InterVar varName varType KDUndefined varMutable Nothing) <$> fields program) ++ --add all fields as variables to stack
