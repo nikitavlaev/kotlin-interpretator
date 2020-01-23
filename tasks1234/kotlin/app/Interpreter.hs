@@ -39,6 +39,7 @@ dataConversionFromTypeToType (KDArray (kdata : kdatas)) (KTArray ktype1) (KTArra
     kdata' -> case dataConversionFromTypeToType (KDArray kdatas) (KTArray ktype1) (KTArray ktype2) of
               KDError m -> KDError m
               (KDArray kdatas') -> KDArray $ kdata': kdatas'
+              _ -> KDError "Internal error: function conversion KDArray from KTArray to KTArray can return only KDError or KDArray"
 dataConversionFromTypeToType (KDInt 0) _ KTBool = KDBool False
 dataConversionFromTypeToType (KDInt x) _ KTBool = KDBool True
 dataConversionFromTypeToType r@(KDRecord _) (KTUserType typeName) other = r
@@ -445,8 +446,9 @@ interpretExpression stack (Add e1 e2) = do
         interAdd (KDArray (x : xs)) (KTArray ktype1) (KDArray ys) (KTArray ktype2) = case dataConversionFromTypeToType x ktype1 ktype2 of 
             KDError m -> (KDError m, KTUnknown)
             kdata' ->
-                let (KDArray kdataRes, KTArray ktypeRes) = interAdd (KDArray xs) (KTArray ktype1) (KDArray ys) (KTArray ktype2) in
-                    (KDArray (kdata' : kdataRes), KTArray ktypeRes)
+                case interAdd (KDArray xs) (KTArray ktype1) (KDArray ys) (KTArray ktype2) of
+                    (KDArray kdataRes, KTArray ktypeRes) -> (KDArray (kdata' : kdataRes), KTArray ktypeRes)
+                    _ -> (KDError "Internal error: function interAdd of 2 arrays can return only error or new array", KTUnknown)
         interAdd kdata1 ktype1 kdata2 ktype2 = (KDError $ "Cannot be added " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2, KTUnknown)
 interpretExpression stack (Sub e1 e2) = do
     (kdata1, ktype1, stack') <- interpretExpression stack e1
@@ -536,6 +538,7 @@ interpretExpression stack (Equal e1 e2) = do
                 (KDError m, KTUnknown) -> (KDError m, KTUnknown)
                 (KDBool False, KTBool) -> (KDBool False, KTBool)
                 (KDBool True, KTBool) -> interEqual (KDArray xs) (KTArray ktype1) (KDArray ys) (KTArray ktype2)
+                _ -> (KDError "Internal error: function interEqual can return only error or boolean value", KTUnknown)
         interEqual kdata1 ktype1 kdata2 ktype2 = (KDError $ "Cannot be compared " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2, KTUnknown)
 interpretExpression stack (If cond thenBranch elseBranch) = do
     (kdata, ktype, stack') <- interpretExpression stack cond
