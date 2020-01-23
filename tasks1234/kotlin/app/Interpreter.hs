@@ -29,24 +29,25 @@ dataConversionFromTypeToType (KDInt x) _ KTShort = KDInt $ mod (x + 2 ^ 15) (2 ^
 dataConversionFromTypeToType (KDInt x) _ KTInt = KDInt $ mod (x + 2 ^ 31) (2 ^ 32) - 2 ^ 31
 dataConversionFromTypeToType (KDInt x) _ KTLong = KDInt $ mod (x + 2 ^ 63) (2 ^ 64) - 2 ^ 63
 dataConversionFromTypeToType (KDInt x) _ KTDouble = KDDouble $ fromInteger x
-dataConversionFromTypeToType kdata ktype1 ktype2 | ktype1 == ktype2 = kdata
 dataConversionFromTypeToType kdata ktype1 (KTNullable (KTNullable ktype2)) = KDError "Cannot convert to double-nullable type"
 dataConversionFromTypeToType KDNull (KTNullable _) (KTNullable _) = KDNull
 dataConversionFromTypeToType kdata (KTNullable ktype1) (KTNullable ktype2) = dataConversionFromTypeToType kdata ktype1 ktype2
 dataConversionFromTypeToType kdata ktype1 (KTNullable ktype2) = dataConversionFromTypeToType kdata ktype1 ktype2
-dataConversionFromTypeToType kdata ktype1 KTAny = kdata
-dataConversionFromTypeToType kdata KTAny ktype2 = kdata
-dataConversionFromTypeToType kdata ktype1 KTUnit = KDUnit
-dataConversionFromTypeToType kdata KTUnit ktype2 = KDUnit
 dataConversionFromTypeToType (KDArray []) (KTArray ktype1) (KTArray ktype2) = KDArray []
 dataConversionFromTypeToType (KDArray (kdata : kdatas)) (KTArray ktype1) (KTArray ktype2) = case dataConversionFromTypeToType kdata ktype1 ktype2 of
     KDError m -> KDError m
-    kdata' -> KDArray $ kdata' : kdatas' where
-        (KDArray kdatas') = dataConversionFromTypeToType (KDArray kdatas) (KTArray ktype1) (KTArray ktype2)
+    kdata' -> case dataConversionFromTypeToType (KDArray kdatas) (KTArray ktype1) (KTArray ktype2) of
+              KDError m -> KDError m
+              (KDArray kdatas') -> KDArray $ kdata': kdatas'
 dataConversionFromTypeToType (KDInt 0) _ KTBool = KDBool False
 dataConversionFromTypeToType (KDInt x) _ KTBool = KDBool True
 dataConversionFromTypeToType r@(KDRecord _) (KTUserType typeName) other = r
 dataConversionFromTypeToType r@(KDRecord _) other (KTUserType typeName) = r
+dataConversionFromTypeToType kdata ktype1 ktype2 | ktype1 == ktype2 = kdata
+dataConversionFromTypeToType kdata ktype1 KTAny = kdata
+dataConversionFromTypeToType kdata KTAny ktype2 = kdata
+dataConversionFromTypeToType kdata ktype1 KTUnit = KDUnit
+dataConversionFromTypeToType kdata KTUnit ktype2 = KDUnit
 dataConversionFromTypeToType kdata ktype1 ktype2 = KDError $ show kdata ++ ": cannot convert from type " ++ show ktype1 ++ " to type " ++ show ktype2
 
 autoInferenceTypeFromData :: KData -> KType
@@ -94,6 +95,7 @@ launchFun (Fun {..}) stack arguments = do
                 KDError m -> ([KDError m], [KTUnknown])
                 kdata' -> let (kdatas', ktypes') = checkArgsTypes prevArgs prevKdatas prevKtypes in
                     (kdata' : kdatas', ktype : ktypes')
+            checkArgsTypes _ _ _ = ([KDError "Internal error in checking types: args length was checked before"], [KTUnknown])        
         case kdatas' of
             [KDError m] -> return (KDError $ "Arguments type mismatched in function " ++ name, KTUnknown, stack)
             _ -> do
@@ -104,6 +106,7 @@ launchFun (Fun {..}) stack arguments = do
                     zip5 :: [a] -> [b] -> [c] -> [d] -> [e] -> [(a, b, c, d, e)]
                     zip5 (a : as) (b : bs) (c : cs) (d : ds) (e : es) = (a, b, c, d, e) : zip5 as bs cs ds es
                     zip5 [] [] [] [] [] = []
+                    zip5 _ _ _ _ _ = [] -- here lists are of equal length, so in case of such internal error we drop everything else
                 --pPrint $ Log "Name started function" name
                 --pPrint $ Log "Stack before working function" $ init stack'
                 (kdataResult, ktypeResult, stack'') <- interpretBlock (argsToStackFormat ++ [InterFun] ++ stack') body
@@ -112,6 +115,7 @@ launchFun (Fun {..}) stack arguments = do
                 let stack''' = deleteFun stack'' where
                     deleteFun (InterFun : objs) = objs
                     deleteFun (_ : objs) = deleteFun objs
+                    deleteFun [] = []
                 --pPrint $ Log "Name ended function" name
                 --pPrint $ Log "Stack after working function" $ init stack'''
                 return $ case dataConversionFromTypeToType kdataResult ktypeResult returnType of
@@ -162,6 +166,7 @@ interpretBlock :: [InterObject] -> [FunPrimitive] -> IO (KData, KType, [InterObj
 interpretBlock stack = interBlock (InterBlock : stack) where
     deleteBlock (InterBlock : objs) = objs
     deleteBlock (_ : objs) = deleteBlock objs
+    deleteBlock [] = []
     interBlock stack [fp] = do
        -- pPrint $ Log "Stack" $ init stack
        -- pPrint $ Log "Action" fp
@@ -193,6 +198,8 @@ interpretFunPrimitive stack (While {..}) = do
                 KDError _ -> return (kdataBody, ktypeBody, stack'')
                 _ -> interpretFunPrimitive stack'' (While cond body)
         KDBool False -> return (KDUndefined, KTUnknown, stack')
+        _ -> return (KDError "Invalid condition in While", KTUnknown, stack) 
+interpretFunPrimitive stack _ = return (KDError "This instruction is unsupported for now", KTUnknown, stack) 
 
 createArrayByLambda :: String -> Integer -> Integer -> [FunPrimitive] -> [InterObject] -> KType -> IO (KData, KType, [InterObject])
 createArrayByLambda indexName size index body stack ktypeElement
@@ -208,6 +215,7 @@ createArrayByLambda indexName size index body stack ktypeElement
             (KDError m, KTUnknown, stack'') -> return (KDError m, KTUnknown, stack'')
             -- if index == size - 1 then ktypeOther == KTAny else ktypeOther == ktype
             (KDArray kdatas, KTArray ktypeOther, stack'') -> return (KDArray $ kdata : kdatas, KTArray ktype, stack'')
+            _ -> return (KDError "Internal error in creating array by lambda: created smth else but not an array", KTUnknown, stack')
     | otherwise = do
         --launchFun because here we need type conversion to the type of first element
         (kdata, ktype, stack') <- launchFun (Fun "Element" [Variable False indexName KTInt] ktypeElement body) stack [Val (KDInt index)]
@@ -219,6 +227,7 @@ createArrayByLambda indexName size index body stack ktypeElement
             (KDError m, KTUnknown, stack'') -> return (KDError m, KTUnknown, stack'')
             -- if index == size - 1 then ktypeOther == KTAny else ktypeOther == ktypeElement
             (KDArray kdatas, KTArray ktypeOther, stack'') -> return (KDArray $ kdata : kdatas, KTArray ktypeElement, stack'')
+            _ -> return (KDError "Internal error in creating array by lambda: created smth else but not an array", KTUnknown, stack')
             
 interpretExpression :: [InterObject] -> Expr -> IO (KData, KType, [InterObject])
 interpretExpression stack (Val kdata) = return (kdata, autoInferenceTypeFromData kdata, stack)
@@ -320,6 +329,7 @@ interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields))
                             return $ case kdataRes of
                                 KDError _ -> (kdataRes, KTUnknown, stack')
                                 KDRecord fieldsNewVar -> (KDRecord ((fieldNameOldVar, fieldKDataOldVar, fieldKTypeOldVar, fieldCanModifyOldVar) : fieldsNewVar), KTUserType nameUserType, stack')
+                                _ -> (KDError "Internal error in changing class field: sudden type change", KTUnknown, stack')
                     helperSet stack (KDRecord []) (KTUserType nameUserType) ((Var fieldName) : fields) kdataNewVal ktypeNewVal =
                         return (KDError $ "Field " ++ fieldName ++ " in type " ++ nameUserType ++ " was not found", KTUnknown, stack)
                     helperSet stack _ (KTUserType _) ((Var fieldName) : fields) kdataNewVal ktypeNewVal =
@@ -352,6 +362,7 @@ interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields))
                     splitStackByInterFun (InterFun : objs) = ([], objs)
                     splitStackByInterFun (obj : objs) = (obj : revStackHead, stackTail) where
                         (revStackHead, stackTail) = splitStackByInterFun objs
+                    splitStackByInterFun [] = ([],[])    
 
                     updateStack :: [InterObject] -> String -> KData -> KType -> IO (KData, KType, [InterObject])
                     updateStack stack varName varKData varKType = do
@@ -378,12 +389,13 @@ interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields))
                                             KDUndefined -> return ()
                                             _ -> pPrint $ Log "Error" kdataSet
                                         return (KDUndefined, KTUnknown, reverse revStackHead' ++ [InterFun] ++ newStackTail')
+                                    _ -> return (KDError $ "Internal error: Invalid connected variable type", KTUnknown, [])      
                                 case ktype of
                                     KTUnknown -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name varKType varKData canModify connectedVariable) : newStackTail))
                                     _ -> case dataConversionFromTypeToType varKData varKType ktype of
                                             KDError m -> return (KDError m, KTUnknown, [])
                                             kdataRes -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name ktype kdataRes canModify connectedVariable) : newStackTail))
-                            Nothing -> return (KDError $ "Variable " ++ varName ++ " was not found", KTUnknown, [])
+                            _ -> return (KDError $ "Variable " ++ varName ++ " was not found", KTUnknown, [])                
  
         --skip all non-variables
         interSet stack (obj : objs) varName fields kdataNewVal ktypeNewVal = do
@@ -405,8 +417,10 @@ interpretExpression stack (CallFun ".unnullify" [expr]) = do
         (KDNull, KTNullable _) -> return (KDError "Still null", KTUnknown, stack')
         (_, KTNullable ktypeKernel) -> return (kdata, ktypeKernel, stack')
         (_, _) -> return (kdata, ktype, stack')
-interpretExpression stack (CallFun {name = name, args = fargs}) = interpretFunByName program stack name fargs where
-                                                                    (InterMainClass program) = last stack
+interpretExpression stack (CallFun {name = name, args = fargs}) = case (last stack) of 
+                                                                        (InterMainClass program) -> interpretFunByName program stack name fargs
+                                                                        _ -> return (KDError "Internal error: no program class at the stack bottom", KTUnknown, stack)
+                                                                    
 interpretExpression stack (Add e1 e2) = do
     (kdata1, ktype1, stack') <- interpretExpression stack e1
     (kdata2, ktype2, stack'') <- interpretExpression stack' e2
@@ -529,3 +543,6 @@ interpretExpression stack (If cond thenBranch elseBranch) = do
         KDError m -> return (kdata, ktype, stack')
         KDBool True -> interpretBlock stack' thenBranch
         KDBool False -> interpretBlock stack' elseBranch
+        _ -> return (KDError "Invalid condition in If", KTUnknown, stack) 
+interpretExpression stack (Lambda _ _) = return (KDError "Lambda expression is unsupported for now", KTUnknown, stack)   
+interpretExpression stack (Var _) = return (KDError "Var expression is unsupported for now", KTUnknown, stack) --this is not VarInit, needed for args  
