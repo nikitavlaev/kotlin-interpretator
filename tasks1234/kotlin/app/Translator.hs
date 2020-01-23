@@ -1,10 +1,14 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE RecordWildCards #-}
+
 module Translator where
+import Ast
+
 type Byte = Int -- single byte number
 type Short = Int -- double byte number
 type Long = Integer -- eight byte number
 
-data Instruction = 
+data JVMInstruction = 
       Aaload
     | Aastore
     | Aconst_null
@@ -215,35 +219,59 @@ data Constant =
     | CDouble Double
     | CUtf8 String
     | CString String
-    {-| CNameAndType CUtf8 CUtf8
-    | CClass CUtf8
-    | CFieldref CClass CNameAndType
-    | CMethodref CClass CNameAndType
-    | CInterfaceMethodref CClass CNameAndType-}
+    | CNameAndType Int Int -- offsets; format: #x:#y; x = CUtf8; y = CUtf8
+    | CClass Int -- offset; format: #x; x = CUtf8
+    | CFieldref Int Int -- offsets; format: #x.#y; x = CClass; y = CNameAndType
+    | CMethodref Int Int -- offsets; format: #x.#y; x = CClass; y = CNameAndType
+    | CInterfaceMethodref Int Int -- offsets; (CClass, CNameAndType)
 
 type ConstantPool = [Constant]
 
-data Class = Class {
+data JVMClass = JVMClass {
         constantPool :: ConstantPool,
         thisClass :: Int, -- index from constantPool
         superClass :: Int, -- index from constantPool
-        flags :: [Flag],
-        interfaces :: [Interface],
-        fields :: [Field],
-        methods :: [Method],
-        attributes :: [Attribute]
+        flags :: [JVMFlag],
+        interfaces :: [JVMInterface],
+        fields :: [JVMField],
+        methods :: [JVMMethod],
+        attributes :: [JVMAttribute]
     }
 
-data Method = Method {
+data JVMMethod = JVMMethod {
         thisMethod :: Int, -- index from constantPool
-        flags :: [Flag],
-        code :: [Instruction]
+        flags :: [JVMFlag],
+        code :: [JVMInstruction]
     }
 
-data Interface --TODO
+data JVMInterface --TODO
 
-data Attribute -- TODO
+data JVMAttribute -- TODO
 
-data Field = Int -- index from constantPool
+type JVMField = Int -- index from constantPool
 
-data Flag -- TODO
+data JVMFlag -- TODO
+
+translatorProgram :: Class -> [JVMClass]
+translatorProgram mainClass = runReader (tranlatorClass' mainClass) ""
+
+translatorClass' :: Class -> Reader String [JVMClass] -- in Reader: parentClassName -> list of all inner classes of this class
+translatorClass' thisClass@(Class {..}) = do
+    fullClassName <- asks (\parentName -> if parentName == "" then name else parentName ++ "$" ++ name)
+    let innerJVMClasses = concat $ (\cl -> runReader (translatorClass' cl) fullClassName) <$> classes
+    let thisJVMClass = runReader (execStateT (translatorClass thisClass) []) ""
+    return $ thisJVMClass : innerJVMClasses
+
+translatorClass :: Class -> StateT ConstantPool (Reader String) JVMClass
+translatorClass (Class {..}) = do
+    ...
+    return JVMClass {
+            constantPool = get
+            thisClass = undefined
+            superClass = undefined
+            flags = []
+            interfaces = []
+            fields = undefined
+            methods = undefined
+            attributes = undefined
+        }
