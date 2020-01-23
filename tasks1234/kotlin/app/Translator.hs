@@ -3,6 +3,8 @@
 
 module Translator where
 import Ast
+import Control.Monad.Reader
+import Control.Monad.State.Lazy
 
 type Byte = Int -- single byte number
 type Short = Int -- double byte number
@@ -253,25 +255,25 @@ type JVMField = Int -- index from constantPool
 data JVMFlag -- TODO
 
 translatorProgram :: Class -> [JVMClass]
-translatorProgram mainClass = runReader (tranlatorClass' mainClass) ""
+translatorProgram mainClass = runReader (translatorClass' mainClass) ""
 
 translatorClass' :: Class -> Reader String [JVMClass] -- in Reader: parentClassName -> list of all inner classes of this class
 translatorClass' thisClass@(Class {..}) = do
     fullClassName <- asks (\parentName -> if parentName == "" then name else parentName ++ "$" ++ name)
     let innerJVMClasses = concat $ (\cl -> runReader (translatorClass' cl) fullClassName) <$> classes
-    let thisJVMClass = runReader (execStateT (translatorClass thisClass) []) ""
+    let thisJVMClass = runReader (evalStateT (translatorClass thisClass) []) ""
     return $ thisJVMClass : innerJVMClasses
 
 translatorClass :: Class -> StateT ConstantPool (Reader String) JVMClass
 translatorClass (Class {..}) = do
-    ...
+    pool <- get
     return JVMClass {
-            constantPool = get
-            thisClass = undefined
-            superClass = undefined
-            flags = []
-            interfaces = []
-            fields = undefined
-            methods = undefined
+            constantPool = pool,
+            thisClass = undefined,
+            superClass = undefined,
+            flags = [],
+            interfaces = [],
+            fields = undefined,
+            methods = undefined,
             attributes = undefined
         }
