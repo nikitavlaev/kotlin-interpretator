@@ -185,9 +185,9 @@ interpretBlock stack = interBlock (InterBlock : stack) where
 
 interpretFunPrimitive :: [InterObject] -> FunPrimitive -> IO (KData, KType, [InterObject])
 interpretFunPrimitive stack (Expression expr) = interpretExpression stack expr
-interpretFunPrimitive stack (ValInit {name = name, ktype = ktype}) =
+interpretFunPrimitive stack (ValInit {..}) =
     return (KDUndefined, KTUnknown, (InterVar {name = name, ktype = ktype, kdata = KDUndefined, canModify = False, connectedVariable = Nothing}) : stack)
-interpretFunPrimitive stack (VarInit {name = name, ktype = ktype}) =
+interpretFunPrimitive stack (VarInit {..}) =
     return (KDUndefined, KTUnknown, (InterVar {name = name, ktype = ktype, kdata = KDUndefined, canModify = True, connectedVariable = Nothing}) : stack)
 interpretFunPrimitive stack (While {..}) = do
     (kdataCond, ktypeCond, stack') <- interpretExpression stack cond
@@ -202,33 +202,23 @@ interpretFunPrimitive stack (While {..}) = do
         _ -> return (KDError "Invalid condition in While", KTUnknown, stack) 
 interpretFunPrimitive stack _ = return (KDError "This instruction is unsupported for now", KTUnknown, stack) 
 
-createArrayByLambda :: String -> Integer -> Integer -> [FunPrimitive] -> [InterObject] -> KType -> IO (KData, KType, [InterObject])
-createArrayByLambda indexName size index body stack ktypeElement
-    | index == size = return (KDArray [], KTArray KTAny, stack)
-    | index == 0 = do
-        -- we prohibit stack changes in lambdas 
-        (kdata, ktype, stack') <- interpretBlock ([InterVar indexName KTInt (KDInt index) False Nothing] ++ stack) body
-        -- now all elements of array will have same type (type of first element)
-        -- in createArrayByLambda passed (tail stack') because first element in stack' is (InterVar indexName ...) and
-        -- it is not needed for later work
-        resultCreateTailArray <- createArrayByLambda indexName size (index + 1) body (tail stack') ktype
-        case resultCreateTailArray of
-            (KDError m, KTUnknown, stack'') -> return (KDError m, KTUnknown, stack'')
-            -- if index == size - 1 then ktypeOther == KTAny else ktypeOther == ktype
-            (KDArray kdatas, KTArray ktypeOther, stack'') -> return (KDArray $ kdata : kdatas, KTArray ktype, stack'')
-            _ -> return (KDError "Internal error in creating array by lambda: created smth else but not an array", KTUnknown, stack')
-    | otherwise = do
-        --launchFun because here we need type conversion to the type of first element
-        (kdata, ktype, stack') <- launchFun (Fun "Element" [Variable False indexName KTInt] ktypeElement body) stack [Val (KDInt index)]
-        --pPrint $ Log "index" $ index
-        --pPrint $ Log "kdata" $ kdata
-       -- pPrint $ Log "ktype" $ ktype
-        resultCreateTailArray <- createArrayByLambda indexName size (index + 1) body stack' ktypeElement
-        case resultCreateTailArray of
-            (KDError m, KTUnknown, stack'') -> return (KDError m, KTUnknown, stack'')
-            -- if index == size - 1 then ktypeOther == KTAny else ktypeOther == ktypeElement
-            (KDArray kdatas, KTArray ktypeOther, stack'') -> return (KDArray $ kdata : kdatas, KTArray ktypeElement, stack'')
-            _ -> return (KDError "Internal error in creating array by lambda: created smth else but not an array", KTUnknown, stack')
+createArrayByLambda :: String -> Integer -> [FunPrimitive] -> [InterObject] -> IO (KData, KType, [InterObject])
+createArrayByLambda indexName size body stack = do
+    (kdata, ktypeElement, stack') <- interpretBlock ([InterVar indexName KTInt (KDInt 0) False Nothing] ++ stack) body
+    let iootherResult = foldr f (return (KDArray [], KTArray KTAny, stack')) [1..(size-1)] where 
+                            f :: Integer -> IO (KData, KType, [InterObject]) -> IO (KData, KType, [InterObject]) 
+                            f i ioans = do 
+                                (kdata, ktype, stack') <- launchFun (Fun "Element" [Variable False indexName KTInt] ktypeElement body) stack [Val (KDInt i)]
+                                ans <- ioans
+                                case ans of 
+                                    (KDError m, KTUnknown, stack'') -> return (KDError m, KTUnknown, stack'')
+                                    (KDArray kdatas, KTArray ktypeOther, stack'') -> return (KDArray $ kdata : kdatas, KTArray ktypeElement, stack'')
+                                    _ -> return (KDError "Internal error in creating array by lambda: created smth else but not an array", KTUnknown, stack')
+    otherResult <- iootherResult                                
+    case otherResult of
+        (KDError m, KTUnknown, stack'') -> return (KDError m, KTUnknown, stack'')
+        (KDArray kdatas, KTArray ktypeOther, stack'') -> return (KDArray $ kdata : kdatas, KTArray ktypeElement, stack'')
+        _ -> return (KDError "Internal error in creating array by lambda: created smth else but not an array", KTUnknown, stack')                                   
             
 interpretExpression :: [InterObject] -> Expr -> IO (KData, KType, [InterObject])
 interpretExpression stack (Val kdata) = return (kdata, autoInferenceTypeFromData kdata, stack)
@@ -252,7 +242,7 @@ interpretExpression stack (CallFun {name = "readLine", args = []}) = do
 
 interpretExpression stack (CallFun "Object" []) = return (KDAny, KTAny, stack)
 
-interpretExpression stack (CallFun ".array" [Val (KDInt size), (Lambda ((Variable {..}):[]) body) ]) = createArrayByLambda varName size 0 body stack KTUnknown
+interpretExpression stack (CallFun ".array" [Val (KDInt size), (Lambda ((Variable {..}):[]) body) ]) = createArrayByLambda varName size body stack
 
 interpretExpression stack (CallFun ".array" _ ) = return (KDError "Illegal initial array arguments", KTUnknown, stack)
 
