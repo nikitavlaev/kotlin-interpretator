@@ -29,35 +29,35 @@ customSepBy mainP sepP = helperSepBy mainP sepP <|> pure [] where
 parseCharAfterLeftSlash :: Parser Char
 parseCharAfterLeftSlash = char 'n' *> return '\n' <|> char '\'' *> return '\'' <|> char '"' *> return '"'
 
-parseInt :: Parser Expr
-parseInt = (Val . KDInt . read) <$> ((++) <$> (string "-" <* spaces <|> pure "") <*> many1 digit)
+parseInt :: Parser Integer
+parseInt = read <$> ((++) <$> (string "-" <* spaces <|> pure "") <*> many1 digit)
 
-parseDouble :: Parser Expr
-parseDouble = (Val . KDDouble . read) <$> 
+parseDouble :: Parser Double
+parseDouble = read <$> 
                     ((\a b c d -> a ++ b ++ c ++ d) <$> 
                     (string "-" <* spaces <|> pure "") <*> many1 digit <*> string "." <*> many1 digit)
 
-parseString :: Parser Expr
-parseString = (Val . KDArray . fmap KDChar) <$> between (char '"') (char '"') (many $ char '\\' *> parseCharAfterLeftSlash <|> satisfy (/= '"'))
+parseString :: Parser String -- (KDArray . fmap KDChar) <$>
+parseString = between (char '"') (char '"') (many $ char '\\' *> parseCharAfterLeftSlash <|> satisfy (/= '"'))
 
-parseRange :: Parser Expr
-parseRange = try $ parseInt >>= (\(Val (KDInt x)) ->
-    ((string ".." *> parseInt) >>= (\(Val (KDInt y)) ->
-        try ((spaces *> string "step" *> spaces *> parseInt) >>= (\(Val (KDInt z)) ->
-            return $ Val $ KDArray [KDInt z | z <- [x, x + z .. y]])) <|>
-        (return $ Val $ KDArray [KDInt z | z <- [x..y]]))) <|>
-    ((spaces *> string "until" *> spaces *> parseInt) >>= (\(Val (KDInt y)) ->
-        try ((spaces *> string "step" *> spaces *> parseInt) >>= (\(Val (KDInt z)) ->
-            return $ Val $ KDArray [KDInt z | z <- [x, x + z .. (y - 1)]])) <|>
-        (return $ Val $ KDArray [KDInt z | z <- [x..(y - 1)]]))) <|>
-    ((spaces *> string "downTo" *> spaces *> parseInt) >>= (\(Val (KDInt y)) ->
-        try ((spaces *> string "step" *> spaces *> parseInt) >>= (\(Val (KDInt z)) ->
-            return $ Val $ KDArray [KDInt z | z <- [x, x - z .. y]])) <|>
-        (return $ Val $ KDArray [KDInt z | z <- [x, x - 1 .. y]]))
-    ))
+parseRange :: Parser [Integer] --KDArray [KDInt z | z <- [x, x + z .. y]])
+parseRange = parseInt >>= (\x ->
+    ((string ".." *> parseInt) >>= (\y ->
+        try ((spaces *> string "step" *> spaces *> parseInt) >>= (\z ->
+            return $  [z | z <- [x, x + z .. y]])) <|>
+        (return $ [z | z <- [x..y]]))) <|>
+    ((spaces *> string "until" *> spaces *> parseInt) >>= (\y ->
+        try ((spaces *> string "step" *> spaces *> parseInt) >>= (\z ->
+            return $ [z | z <- [x, x + z .. (y - 1)]])) <|>
+        (return $ [z | z <- [x..(y - 1)]]))) <|>
+    ((spaces *> string "downTo" *> spaces *> parseInt) >>= (\y ->
+        try ((spaces *> string "step" *> spaces *> parseInt) >>= (\z ->
+            return $ [z | z <- [x, x - z .. y]])) <|>
+        (return $ [z | z <- [x, x - 1 .. y]]))
+    )) 
 
-parseChar :: Parser Expr
-parseChar = (Val . KDChar) <$> between (char '\'') (char '\'') ((char '\\' *> parseCharAfterLeftSlash) <|> anyChar)
+parseChar :: Parser Char
+parseChar = between (char '\'') (char '\'') ((char '\\' *> parseCharAfterLeftSlash) <|> anyChar)
 
 parseFunPrimitive :: Parser [FunPrimitive]
 parseFunPrimitive = try parseWhile 
@@ -118,33 +118,22 @@ parseArrayLambdaCtor = do
     spaces
     lambda <- parseLambda
     spaces
-    return $ CallFun ".array" [size, lambda]
-
-{-parseArrayEmptyCtor :: Parser Expr
-parseArrayEmptyCtor = do 
-    string "Array"
-    char '('
-    spaces
-    size <- parseInt --TODO : parseNumericValue?
-    spaces 
-    char ')'
-    spaces
-    lambda <- parseLambda
-    spaces
-    return $ CallFun ".array" [size, lambda]    -}
+    return $ CallFun ".array" [Val $ KDInt size, lambda]
 
 parseRValue :: Parser Expr
 parseRValue = try parseArrayLambdaCtor
-                -- <|> try parseArrayEmptyCtor
                 <|> parseOr
 
+parseFinalValue :: Parser Expr 
+parseFinalValue = Val <$> (try ( (KDArray . fmap KDInt) <$> parseRange)
+                    <|> try (KDDouble <$> parseDouble) 
+                    <|> try (KDInt <$> parseInt) 
+                    <|> try ((KDArray . fmap KDChar) <$> parseString) 
+                    <|> KDChar <$> parseChar)
+
 parseValue :: Parser Expr
-parseValue = try parseRange
-                <|> try parseDouble 
-                <|> try parseInt 
-                <|> try parseString 
-                <|> try parseChar 
-                <|> parseInparens
+parseValue = try parseFinalValue  
+            <|> parseInparens
 
 parseInparens :: Parser Expr
 parseInparens = char '(' *> spaces *> parseOr <* spaces <* char ')'
@@ -225,6 +214,7 @@ parseFunOrVar = helperName (CallFun ".get" []) where
         let gettingField = CallFun ".get" $ (Var name) : prevPhrase
         --reversing because of interpretator convinience, can't construct at correct order from the beginning because of the pattern matching
         helperInparens gettingField <|> helperIndex gettingField <|> helperPoint gettingField <|> return (CallFun ".get" $ reverse $ (Var name) : prevPhrase)
+    helperName _ = fail "Wrong helperName argument"    
     helperInparens (CallFun ".get" [Var name]) = do
         char '('
         separator
@@ -232,7 +222,7 @@ parseFunOrVar = helperName (CallFun ".get" []) where
         separator
         char ')'
         let function = CallFun ".get" [CallFun name args]
-        helperIndex function <|> helperPoint function <|> return function
+        helperIndex function <|> helperPoint function <|> return function   
     helperInparens (CallFun ".get" ((Var field) : prevPhrase)) = do
         char '('
         separator
@@ -241,6 +231,7 @@ parseFunOrVar = helperName (CallFun ".get" []) where
         char ')'
         let method = CallFun ".get" [CallFun ('.' : field) $ (CallFun ".get" $ reverse prevPhrase) : args]
         helperIndex method <|> helperPoint method <|> return method
+    helperInparens _ = fail "Wrong helperInparens argument"     
     helperIndex (CallFun ".get" prevPhrase) = do
         char '['
         separator
@@ -249,9 +240,11 @@ parseFunOrVar = helperName (CallFun ".get" []) where
         char ']'
         let element = CallFun ".get" $ index : prevPhrase
         helperIndex element <|> helperPoint element <|> return (CallFun ".get" $ reverse $ index : prevPhrase)
+    helperIndex _ = fail "Wrong helperIndex argument"     
     helperPoint (CallFun ".get" prevPhrase) = do
         char '.'
         helperName $ CallFun ".get" prevPhrase
+    helperPoint _ = fail "Wrong helperPoint argument"     
 
 parseBlock :: Parser [FunPrimitive]
 parseBlock = (concat <$> try (char '{' *> separator *> customSepBy parseFunPrimitive semicolon <* (semicolon <|> separator) <* char '}')) <|>
@@ -459,23 +452,24 @@ parseClass parentClass parentClassNameWithDot = do
         let parentClassUpdated = Class parentName parentFields (standardConstructor : parentMethods) parentClasses where
                 Class parentName parentFields parentMethods parentClasses = parentClass
         (parentClassUpdated2, cl1) <- parseClassNext parentClassUpdated (parentClassNameWithDot ++ className) constructorFields
-        let newMethod = Fun className 
-                            (if parentClassNameWithDot == "" then args else (Variable False "'" $ KTUserType $ init parentClassNameWithDot) : args)
-                            returnType ([firstPart] ++
-                                        [(Expression $ (CallFun ".set" ([Val $ KDRecord (translateVarListToEmptyRecord (fields $ cl0 `mappend` cl1))] ++ [Var "this"]) ))] ++
-                                        (getSetters constructorFields) ++
-                                        initPart ++
-                                        [(Expression $ (CallFun ".get" [Var "this"]))]) where
-                                                translateVarListToEmptyRecord :: [Variable] -> [(String, KData, KType, Bool)]
-                                                translateVarListToEmptyRecord ((Variable varMutable varName varType) : vs) = (varName, KDUndefined, varType, varMutable) : (translateVarListToEmptyRecord vs)
-                                                translateVarListToEmptyRecord [] = []
-                                                (Class _ _ ((Fun _ args returnType (firstPart:initPart)):mtds) _ ) = parentClassUpdated2
-                                                getSetters :: [Variable] -> [FunPrimitive]
-                                                getSetters [] = []
-                                                getSetters ((Variable {..}): fds) = (Expression $ (CallFun ".set" [CallFun ".get" [Var varName], Var "this", Var varName])) : (getSetters fds)
-        let parentClassUpdated3 = Class parentName parentFields (newMethod : prevMethods) parentClasses where
-                (Class parentName parentFields (oldMethod : prevMethods) parentClasses) = parentClassUpdated2    
-        return (parentClassUpdated3, cl0 `mappend` cl1)
+        case parentClassUpdated2 of
+            (Class parentName parentFields ((Fun _ args returnType (firstPart:initPart)):prevMethods) parentClasses ) -> do
+                    let newMethod = Fun className 
+                                        (if parentClassNameWithDot == "" then args else (Variable False "'" $ KTUserType $ init parentClassNameWithDot) : args)
+                                        returnType ([firstPart] ++
+                                                    [(Expression $ (CallFun ".set" ([Val $ KDRecord (translateVarListToEmptyRecord (fields $ cl0 `mappend` cl1))] ++ [Var "this"]) ))] ++
+                                                    (getSetters constructorFields) ++
+                                                    initPart ++
+                                                    [(Expression $ (CallFun ".get" [Var "this"]))]) where
+                                                            translateVarListToEmptyRecord :: [Variable] -> [(String, KData, KType, Bool)]
+                                                            translateVarListToEmptyRecord ((Variable varMutable varName varType) : vs) = (varName, KDUndefined, varType, varMutable) : (translateVarListToEmptyRecord vs)
+                                                            translateVarListToEmptyRecord [] = []
+                                                            getSetters :: [Variable] -> [FunPrimitive]
+                                                            getSetters [] = []
+                                                            getSetters ((Variable {..}): fds) = (Expression $ (CallFun ".set" [CallFun ".get" [Var varName], Var "this", Var varName])) : (getSetters fds)
+                    let parentClassUpdated3 = Class parentName parentFields (newMethod : prevMethods) parentClasses  
+                    return (parentClassUpdated3, cl0 `mappend` cl1)
+            _ -> fail $ "Unexprected construction of class " ++ className        
 
 parseClassNext :: Class -> String -> [Variable] -> Parser (Class,Class)
 parseClassNext parentClass@(Class {..}) fullClassName constructorFields = try (do 
@@ -491,13 +485,14 @@ parseClassNext parentClass@(Class {..}) fullClassName constructorFields = try (d
                                     string "init"
                                     spaces
                                     initBody <- ((try parseBlock) <|> char '=' *> separator *> parseExpr)
-                                    let newConstructor = Fun constrName constrArgs constrType (constrBody ++ initBody) where
-                                        (Class pName pFields ((Fun constrName constrArgs constrType constrBody):fs) pClasses) = parentClass
-                                    let parentClassUpdated = (Class pName pFields (newConstructor:fs) pClasses) where
-                                        (Class pName pFields ((Fun constrName constrArgs constrType constrBody):fs) pClasses) = parentClass
-                                    separator
-                                    (parentClassUpdated2, cl2) <- parseClassNext parentClassUpdated fullClassName constructorFields
-                                    return (parentClassUpdated2, cl2)
+                                    case parentClass of
+                                        (Class pName pFields ((Fun constrName constrArgs constrType constrBody):fs) pClasses) -> do
+                                            let newConstructor = Fun constrName constrArgs constrType (constrBody ++ initBody)
+                                            let parentClassUpdated = (Class pName pFields (newConstructor:fs) pClasses)
+                                            separator
+                                            (parentClassUpdated2, cl2) <- parseClassNext parentClassUpdated fullClassName constructorFields
+                                            return (parentClassUpdated2, cl2)
+                                        _ -> fail $ "Unexprected construction of class " ++ fullClassName    
                                     )     
                         <|> try (do 
                                     val <- parseVariableVal
