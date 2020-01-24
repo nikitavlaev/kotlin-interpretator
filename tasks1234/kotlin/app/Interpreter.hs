@@ -94,8 +94,9 @@ launchFun (Fun {..}) stack arguments = do
             checkArgsTypes [] [] [] = ([], [])
             checkArgsTypes ((Variable {..}) : prevArgs) (kdata : prevKdatas) (ktype : prevKtypes) = case dataConversionFromTypeToType kdata ktype varType of
                 KDError m -> ([KDError m], [KTUnknown])
-                kdata' -> let (kdatas', ktypes') = checkArgsTypes prevArgs prevKdatas prevKtypes in
-                    (kdata' : kdatas', ktype : ktypes')
+                kdata' -> case checkArgsTypes prevArgs prevKdatas prevKtypes of
+                            ([KDError m], [KTUnknown]) -> ([KDError m], [KTUnknown])
+                            (kdatas', ktypes') -> (kdata' : kdatas', ktype : ktypes')
             checkArgsTypes _ _ _ = ([KDError "Internal error in checking types: args length was checked before"], [KTUnknown])        
         case kdatas' of
             [KDError m] -> return (KDError $ "Arguments type mismatched in function " ++ name, KTUnknown, stack)
