@@ -225,6 +225,9 @@ createArrayByLambda indexName size body stack = do
         (KDArray kdatas, KTArray ktypeOther, stack'') -> return (KDArray $ kdata : kdatas, KTArray ktypeElement, stack'')
         _ -> return (KDError "Internal error in creating array by lambda: created smth else but not an array", KTUnknown, stack')                                   
             
+checkIfInteger :: KType -> Bool 
+checkIfInteger t =  t == KTByte || t == KTShort || t == KTInt || t == KTLong
+
 interpretExpression :: [InterObject] -> Expr -> IO (KData, KType, [InterObject])
 interpretExpression stack (Val kdata) = return (kdata, autoInferenceTypeFromData kdata, stack)
 interpretExpression stack (CallFun {name = "print", args = [exprMessage]}) = do
@@ -278,13 +281,10 @@ interpretExpression stack (CallFun ".get" (variable : fields)) = do
             (kdataIndex, ktypeIndex, stack') <- interpretExpression stack field
             case kdataIndex of
                 KDError m -> return (KDError m, KTUnknown, stack')
-                KDInt index ->
-                    if ktypeIndex /= KTByte && ktypeIndex /= KTShort && ktypeIndex /= KTInt && ktypeIndex /= KTLong then
-                        return (KDError $ "Index of array cannot of type " ++ show ktypeIndex, KTUnknown, stack')
-                    else if index < 0 || fromInteger index >= length kdatas then
-                        return (KDError $ "Index " ++ show index ++ " outside the bounds of the array", KTUnknown, stack')
-                    else
-                        getFields stack' (kdatas !! fromInteger index) ktype fields
+                KDInt index 
+                    | (checkIfInteger ktypeIndex == False) -> return (KDError $ "Index of array cannot be of type " ++ show ktypeIndex, KTUnknown, stack')
+                    | (index < 0 || fromInteger index >= length kdatas) -> return (KDError $ "Index " ++ show index ++ " outside the bounds of the array", KTUnknown, stack')
+                    | otherwise -> getFields stack' (kdatas !! fromInteger index) ktype fields
                 _ -> return (KDError $ show kdataIndex ++ " is not index of array", KTUnknown, stack')
         getFields stack _ ktypeVar ((Var fieldName) : fields) = return (KDError $ "The variable of type " ++ show ktypeVar ++ " does not have the field " ++ fieldName, KTUnknown, stack)
         getFields stack _ ktypeVar (field : fields) = return (KDError $ "Cannot take an index from the variable of type " ++ show ktypeVar, KTUnknown, stack)
@@ -336,18 +336,16 @@ interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields))
                         (kdataIndex, ktypeIndex, stack') <- interpretExpression stack exprIndex
                         case kdataIndex of
                             KDError _ -> return (kdataIndex, KTUnknown, stack')
-                            KDInt index ->
-                                if ktypeIndex == KTByte || ktypeIndex == KTShort || ktypeIndex == KTInt || ktypeIndex == KTLong then
-                                    if index < 0 || fromInteger index >= length kdatasKernelOldVar then
-                                        return (KDError $ "Index " ++ show index ++ " outside the bounds of the array", KTUnknown, stack')
-                                    else do
+                            KDInt index 
+                                | (checkIfInteger ktypeIndex == False) -> return (KDError $ "Index of array cannot be the value of type " ++ show ktypeIndex, KTUnknown, stack')
+                                | (index < 0 || fromInteger index >= length kdatasKernelOldVar) -> return (KDError $ "Index " ++ show index ++ " outside the bounds of the array", KTUnknown, stack')
+                                | otherwise -> do
                                         (kdataNewVar, ktypeNewVar, stack'') <- helperSet stack' (kdatasKernelOldVar !! fromInteger index) ktypeKernelOldVar fields kdataNewVal ktypeNewVal
                                         case kdataNewVar of
                                             KDError _ -> return (kdataNewVar, KTUnknown, stack'')
                                             _ ->
                                                 if ktypeNewVar /= ktypeKernelOldVar then return (KDError $ "Cannot change array element type from " ++ show ktypeKernelOldVar ++ " to " ++ show ktypeNewVar, KTUnknown, stack'')
                                                 else return (KDArray (take (fromInteger index) kdatasKernelOldVar ++ [kdataNewVar] ++ drop (fromInteger index + 1) kdatasKernelOldVar), KTArray ktypeKernelOldVar, stack'')
-                                else return (KDError $ "Index of array cannot be the value of type " ++ show ktypeIndex, KTUnknown, stack')
                             _ -> return (KDError $ "Data " ++ show kdataIndex ++ " cannot be an index of array", KTUnknown, stack')
                     helperSet stack _ (KTArray _) (exprIndex : fields) kdataNewVal ktypeNewVal =
                         return (KDError $ "Data and type mismatch", KTUnknown, stack)
