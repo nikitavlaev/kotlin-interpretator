@@ -22,6 +22,13 @@ data InterObject =
     | InterMainClass {cl :: Class}
     deriving Show
 
+instance Eq InterObject where --wrong comparison, but enough to fulfill its purpose for now
+    InterFun == InterFun = True
+    (InterVar n1 t1 d1 f1 _) == (InterVar n2 t2 d2 f2 _) = (n1 == n2) && (t1 == t2) && (show d1 == show d2) && (f1 == f2)
+    InterBlock == InterBlock = True
+    InterMainClass _ == InterMainClass _ = True
+    _ == _ = False
+    
 dataConversionFromTypeToType :: KData -> KType -> KType -> KData
 dataConversionFromTypeToType (KDError m) _ _ = KDError m
 dataConversionFromTypeToType (KDInt x) _ KTByte = KDInt $ mod (x + 2 ^ 7) (2 ^ 8) - 2 ^ 7
@@ -114,10 +121,7 @@ launchFun (Fun {..}) stack arguments = do
                 (kdataResult, ktypeResult, stack'') <- interpretBlock (argsToStackFormat ++ [InterFun] ++ stack') body
                 --pPrint $ Log ("kdataResult in function" ++ name) $ kdataResult
                 --pPrint $ Log ("ktypeResult in function" ++ name) $ ktypeResult
-                let stack''' = deleteFun stack'' where
-                    deleteFun (InterFun : objs) = objs
-                    deleteFun (_ : objs) = deleteFun objs
-                    deleteFun [] = []
+                let stack''' = delete InterFun stack''
                 --pPrint $ Log "Name ended function" name
                 --pPrint $ Log "Stack after working function" $ init stack'''
                 return $ case dataConversionFromTypeToType kdataResult ktypeResult returnType of
