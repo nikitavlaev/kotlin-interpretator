@@ -5,6 +5,7 @@ module Translator where
 import Ast
 import Control.Monad.Reader
 import Control.Monad.State.Lazy
+import System.IO
 
 type Byte = Int -- single byte number
 type Short = Int -- double byte number
@@ -277,3 +278,9 @@ translatorClass (Class {..}) = do
             methods = undefined,
             attributes = undefined
         }
+
+translateHelloWorld :: String -> IO()
+translateHelloWorld name = do 
+    helloWorldj <- readFile "test/hello_world.j"
+    writeFile (name ++ ".j") helloWorldj
+    return ()
