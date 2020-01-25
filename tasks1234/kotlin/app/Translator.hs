@@ -1,233 +1,176 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Translator where
 import Ast
 import Control.Monad.Reader
 import Control.Monad.State.Lazy
 import System.IO
+import Data.Tuple.Utils
+import Data.List
 
-type Byte = Int -- single byte number
-type Short = Int -- double byte number
-type Long = Integer -- eight byte number
+type TableLocalVariables = [(String, KType, Int)] -- (name, type, index)
 
-data JVMInstruction = 
-      Aaload
-    | Aastore
-    | Aconst_null
-    | Aload {index :: Byte}
-    | Aload_0
-    | Aload_1
-    | Aload_2
-    | Aload_3
-    | Anewarray {index :: Short}
-    | Areturn
-    | Arraylength
-    | Astore {index :: Byte}
-    | Astore_0
-    | Astore_1
-    | Astore_2
-    | Astore_3
-    | Athrow
-    | Baload
-    | Bastore
-    | Bipush {byte :: Byte}
-    | Caload
-    | Castore
-    | Checkcast {index :: Short}
-    | D2f
-    | D2i
-    | D2l
-    | Dadd
-    | Daload
-    | Dastore
-    | Dcmpg
-    | Dcmpl
-    | Dconst_0
-    | Dconst_1
-    | Ddiv
-    | Dload {index :: Byte}
-    | Dload_0
-    | Dload_1
-    | Dload_2
-    | Dload_3
-    | Dmul
-    | Dneg
-    | Drem
-    | Dreturn
-    | Dstore {index :: Byte}
-    | Dstore_0
-    | Dstore_1
-    | Dstore_2
-    | Dstore_3
-    | Dsub
-    | Dup
-    | Dup_x1
-    | Dup_x2
-    | Dup2
-    | Dup2_x1
-    | Dup2_x2
-    | F2d
-    | F2i
-    | F2l
-    | Fadd
-    | Faload
-    | Fastore
-    | Fcmpg
-    | Fcmpl
-    | Fconst_0
-    | Fconst_1
-    | Fconst_2
-    | Fdiv
-    | Fload {index :: Byte}
-    | Fload_0
-    | Fload_1
-    | Fload_2
-    | Fload_3
-    | Fmul
-    | Fneg
-    | Frem
-    | Freturn
-    | Fstore {index :: Byte}
-    | Fstore_0
-    | Fstore_1
-    | Fstore_2
-    | Fstore_3
-    | Fsub
-    | Getfield {index :: Short}
-    | Getstatic {index :: Short}
-    | Goto {branch :: Short}
-    | Goto_w {branch :: Int} -- 4(!) bytes
-    | I2b
-    | I2c
-    | I2d
-    | I2f
-    | I2l
-    | I2s
-    | Iadd
-    | Iaload
-    | Iand
-    | Iastore
-    | Iconst_m1 -- (-1)
-    | Iconst_0
-    | Iconst_1
-    | Iconst_2
-    | Iconst_3
-    | Iconst_4
-    | Iconst_5
-    | Idiv
-    | If_acmpeq {branch :: Short}
-    | If_acmpne {branch :: Short}
-    | If_icmpeq {branch :: Short}
-    | If_icmpne {branch :: Short}
-    | If_icmplt {branch :: Short}
-    | If_icmpge {branch :: Short}
-    | If_icmpgt {branch :: Short}
-    | If_icmple {branch :: Short}
-    | Ifeq {branch :: Short}
-    | Ifne {branch :: Short}
-    | Iflt {branch :: Short}
-    | Ifge {branch :: Short}
-    | Ifgt {branch :: Short}
-    | Ifle {branch :: Short}
-    | Ifnonnull {branch :: Short}
-    | Ifnull {branch :: Short}
-    | Iinc {index :: Byte, const :: Byte}
-    | Iload {index :: Byte}
-    | Iload_0
-    | Iload_1
-    | Iload_2
-    | Iload_3
-    | Imul
-    | Ineg
-    | Instanceof {index :: Short}
-    | Invokedynamic {index :: Short} -- + 0 0
-    | Invokeinterface {index :: Short, count :: Byte} -- + 0
-    | Invokespecial {index :: Short}
-    | Invokestatic {index :: Short}
-    | Invokevirtual {index :: Short}
-    | Ior
-    | Irem
-    | Ireturn
-    | Ishl
-    | Ishr
-    | Istore {index :: Byte}
-    | Istore_0
-    | Istore_1
-    | Istore_2
-    | Istore_3
-    | Isub
-    | Iushr
-    | Ixor
-    | Jsr {branch :: Short}
-    | Jsr_w {branch :: Int} -- 4(!) bytes
-    | L2d
-    | L2f
-    | L2i
-    | Ladd
-    | Laload
-    | Land
-    | Lastore
-    | Lcmp
-    | Lconst_0
-    | Lconst_1
-    | Ldc {index :: Byte}
-    | Ldc_w {index :: Short}
-    | Ldc2_w {index :: Short}
-    | Ldiv
-    | Lload {index :: Byte}
-    | Lload_0
-    | Lload_1
-    | Lload_2
-    | Lload_3
-    | Lmul
-    | Lneg
-    | Lookupswitch -- TODO
-    | Lor
-    | Lrem
-    | Lreturn
-    | Lshl
-    | Lshr
-    | Lstore {index :: Byte}
-    | Lstore_0
-    | Lstore_1
-    | Lstore_2
-    | Lstore_3
-    | Lsub
-    | Lushr
-    | Lxor
-    | Monitorenter
-    | Monitorexit
-    | Multianewarray {index :: Short, dimensions :: Byte}
-    | New {index :: Short}
-    | Newarray {atype :: Byte}
-    | Nop
-    | Pop
-    | Pop2
-    | Putfield {index :: Short}
-    | Putstatic {index :: Short}
-    | Ret {index :: Byte}
-    | Return
-    | Saload
-    | Sastore
-    | Sipush {short :: Short}
-    | Swap
-    | Tableswitch -- TODO
-    | Wide -- TODO
+pushStr :: String -> StateT TableLocalVariables (State [String]) KType
+pushStr newStr = lift $ modify (newStr : )
 
-data Constant =
-      CInteger Int
-    | CLong Long
-    | CFloat Float
-    | CDouble Double
-    | CUtf8 String
-    | CString String
-    | CNameAndType Int Int -- offsets; format: #x:#y; x = CUtf8; y = CUtf8
-    | CClass Int -- offset; format: #x; x = CUtf8
-    | CFieldref Int Int -- offsets; format: #x.#y; x = CClass; y = CNameAndType
-    | CMethodref Int Int -- offsets; format: #x.#y; x = CClass; y = CNameAndType
-    | CInterfaceMethodref Int Int -- offsets; (CClass, CNameAndType)
+translatorExpression :: Expr -> StateT TableLocalVariables (State [String]) KType
+translatorExpression = \case
+    Val (KDByte val) -> do
+        pushStr $ "bipush " ++ show val
+        return KTByte
+    Val (KDShort val) -> do
+        pushStr $ "sipush " ++ show val
+        return KTShort
+    Val (KDInt val) -> do
+        pushStr $ "ldc " ++ show val
+        return KTInt
+    Val (KDLong val) -> do
+        pushStr $ "ldc_w " ++ show val
+        return KTLong
+    Val (KDArray str@((KDChar c) : cs)) -> do
+        pushStr $ "ldc " ++ (getChar <$> str)
+        return $ KTArray KTChar
+    Val (KDDouble val) -> do
+        pushStr $ "ldc_w " ++ show val
+        return KTDouble
+    CallFun ".get" [Var varName] -> do
+        tableLocalVariables <- get
+        case find ((== varName) . fst3) tableLocalVariables of
+            Just var -> do
+                let ktype = snd3 var
+                pushStr $ case ktype of
+                    KTByte -> "iload " ++ show (trd3 var)
+                    KTShort -> "iload " ++ show (trd3 var)
+                    KTInt -> "iload " ++ show (trd3 var)
+                    KTLong -> "lload " ++ show (trd3 var)
+                    KTDouble -> "dload " ++ show (trd3 var)
+                    _ -> "aload " ++ show (trd3 var)
+                return ktype
+            Nothing -> undefined
+    Add e1 e2 -> do
+        ktype1 <- translatorExpression e1
+        ktype2 <- translatorExpression e2
+        case (ktype1, ktype2) of
+            (KTInt, KTInt) -> do
+                pushStr "iadd"
+                return KTInt
+            (KTLong, KTInt) -> do
+                pushStr "i2l"
+                pushStr "ladd"
+                return KTLong
+            (KTInt, KTLong) -> do
+                lengthTableLocalVariables <- gets length
+                pushStr $ "lstore " ++ show lengthTableLocalVariables
+                pushStr "i2l"
+                pushStr $ "lload " ++ show lengthTableLocalVariables
+                pushStr "ladd"
+                return KTLong
+            (KTLong, KTLong) -> do
+                pushStr "ladd"
+                return KTLong
+            (KTDouble, KTDouble) -> do
+                pushStr "dadd"
+                return KTLong
+    Sub e1 e2 -> do
+        ktype1 <- translatorExpression e1
+        ktype2 <- translatorExpression e2
+        case (ktype1, ktype2) of
+            (KTInt, KTInt) -> do
+                pushStr "isub"
+                return KTInt
+            (KTLong, KTInt) -> do
+                pushStr "i2l"
+                pushStr "lsub"
+                return KTLong
+            (KTInt, KTLong) -> do
+                lengthTableLocalVariables <- gets length
+                pushStr $ "lstore " ++ show lengthTableLocalVariables
+                pushStr "i2l"
+                pushStr $ "lload " ++ show lengthTableLocalVariables
+                pushStr "lsub"
+                return KTLong
+            (KTLong, KTLong) -> do
+                pushStr "lsub"
+                return KTLong
+            (KTDouble, KTDouble) -> do
+                pushStr "dsub"
+                return KTLong
+    Mul e1 e2 -> do
+        ktype1 <- translatorExpression e1
+        ktype2 <- translatorExpression e2
+        case (ktype1, ktype2) of
+            (KTInt, KTInt) -> do
+                pushStr "imul"
+                return KTInt
+            (KTLong, KTInt) -> do
+                pushStr "i2l"
+                pushStr "lmul"
+                return KTLong
+            (KTInt, KTLong) -> do
+                lengthTableLocalVariables <- gets length
+                pushStr $ "lstore " ++ show lengthTableLocalVariables
+                pushStr "i2l"
+                pushStr $ "lload " ++ show lengthTableLocalVariables
+                pushStr "lmul"
+                return KTLong
+            (KTLong, KTLong) -> do
+                pushStr "lmul"
+                return KTLong
+            (KTDouble, KTDouble) -> do
+                pushStr "dmul"
+                return KTLong
+    Div e1 e2 -> do
+        ktype1 <- translatorExpression e1
+        ktype2 <- translatorExpression e2
+        case (ktype1, ktype2) of
+            (KTInt, KTInt) -> do
+                pushStr "idiv"
+                return KTInt
+            (KTLong, KTInt) -> do
+                pushStr "i2l"
+                pushStr "ldiv"
+                return KTLong
+            (KTInt, KTLong) -> do
+                lengthTableLocalVariables <- gets length
+                pushStr $ "lstore " ++ show lengthTableLocalVariables
+                pushStr "i2l"
+                pushStr $ "lload " ++ show lengthTableLocalVariables
+                pushStr "ldiv"
+                return KTLong
+            (KTLong, KTLong) -> do
+                pushStr "ldiv"
+                return KTLong
+            (KTDouble, KTDouble) -> do
+                pushStr "ddiv"
+                return KTLong
+    Mod e1 e2 -> do
+        ktype1 <- translatorExpression e1
+        ktype2 <- translatorExpression e2
+        case (ktype1, ktype2) of
+            (KTInt, KTInt) -> do
+                pushStr "irem"
+                return KTInt
+            (KTLong, KTInt) -> do
+                pushStr "i2l"
+                pushStr "lrem"
+                return KTLong
+            (KTInt, KTLong) -> do
+                lengthTableLocalVariables <- gets length
+                pushStr $ "lstore " ++ show lengthTableLocalVariables
+                pushStr "i2l"
+                pushStr $ "lload " ++ show lengthTableLocalVariables
+                pushStr "lrem"
+                return KTLong
+            (KTLong, KTLong) -> do
+                pushStr "lrem"
+                return KTLong
+            (KTDouble, KTDouble) -> do
+                pushStr "drem"
+                return KTLong
 
+{-
 type ConstantPool = [Constant]
 
 data JVMClass = JVMClass {
@@ -284,3 +227,4 @@ translateHelloWorld name = do
     helloWorldj <- readFile "test/hello_world.j"
     writeFile (name ++ ".j") helloWorldj
     return ()
+-}

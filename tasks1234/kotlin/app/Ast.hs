@@ -84,7 +84,7 @@ instance Ord KType where
 data KData = KDUnit
     | KDNull
     | KDBool Bool
-    | KDChar Char
+    | KDChar {getChar :: Char}
     | KDInt Integer
     | KDDouble Double
     | KDArray [KData]
