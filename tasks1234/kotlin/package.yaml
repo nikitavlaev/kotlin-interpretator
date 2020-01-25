@@ -39,6 +39,7 @@ executables:
     - pretty-simple
     - mtl
     - split
+    - MissingH
 
 tests:
   kotlin-test:
