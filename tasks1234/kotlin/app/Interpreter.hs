@@ -93,21 +93,21 @@ interpretProgram program =
         putStrLn $ "\n\nError: Function Main returned " ++ show kdata ++ " of type " ++ show ktype ++ ", but was expected unit"
         return ())
 
+checkArgsTypes :: [Variable] -> [KData] -> [KType] -> Either String ([KData],[KType])
+checkArgsTypes [] [] [] = Right ([], [])
+checkArgsTypes ((Variable {..}) : prevArgs) (kdata : prevKdatas) (ktype : prevKtypes) = case dataConversionFromTypeToType kdata ktype varType of
+    KDError m -> Left m 
+    kdata' -> case checkArgsTypes prevArgs prevKdatas prevKtypes of
+                (Left m) -> (Left m)
+                (Right (kdatas', ktypes')) -> (Right (kdata' : kdatas', ktype : ktypes'))
+checkArgsTypes _ _ _ = Left "Internal error in checking types: args length was checked before"
+
 launchFun :: Fun -> [InterObject] -> [Expr] -> IO (KData, KType, [InterObject])
 launchFun (Fun {..}) stack arguments = do 
-        (kdatas, ktypes, stack') <- {-trace name $-} interpretFunArgs stack arguments
-        let (kdatas', ktypes') = checkArgsTypes args kdatas ktypes where
-            checkArgsTypes :: [Variable] -> [KData] -> [KType] -> ([KData],[KType])
-            checkArgsTypes [] [] [] = ([], [])
-            checkArgsTypes ((Variable {..}) : prevArgs) (kdata : prevKdatas) (ktype : prevKtypes) = case dataConversionFromTypeToType kdata ktype varType of
-                KDError m -> ([KDError m], [KTUnknown])
-                kdata' -> case checkArgsTypes prevArgs prevKdatas prevKtypes of
-                            ([KDError m], [KTUnknown]) -> ([KDError m], [KTUnknown])
-                            (kdatas', ktypes') -> (kdata' : kdatas', ktype : ktypes')
-            checkArgsTypes _ _ _ = ([KDError "Internal error in checking types: args length was checked before"], [KTUnknown])        
-        case kdatas' of
-            [KDError m] -> return (KDError $ "Arguments type mismatched in function " ++ name, KTUnknown, stack)
-            _ -> do
+        (kdatas, ktypes, stack') <- interpretFunArgs stack arguments
+        case checkArgsTypes args kdatas ktypes of
+            (Left m) -> return (KDError $ "Arguments type mismatched in function " ++ name, KTUnknown, stack)
+            (Right (kdatas',ktypes')) -> do
                 let argNames = varName <$> args
                 let argMutables = varMutable <$> args
                 let createVariable = (\(kdata', ktype', varName, varMutable, arg) -> InterVar varName ktype' kdata' False (if varMutable then Just arg else Nothing))
