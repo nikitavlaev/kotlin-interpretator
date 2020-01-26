@@ -12,6 +12,7 @@ import System.IO hiding (getChar)
 import Data.Tuple.Select
 import Data.List
 import Data.Char
+import Debug.Trace
 
 type LocalVariable = (String, KType, Int, Bool) -- (name, type, index, canModify)
 
@@ -201,11 +202,11 @@ translatorExpression =
                 (KTDouble, KTDouble) -> do
                     pushStr "drem"
                     return KTLong
-        CallFun ".set" (rvalue : (Var varName) : []) -> do
+        CallFun ".set" (rvalue : (Var varName) : []) -> do --TODO: val a: Int = 3
             tableLocalVariables <- get
             case find ((== varName) . sel1) tableLocalVariables of
                 Just (name, ktype, index, canModify)
-                    | canModify == True || ktype == KTUnknown -> do
+                    | canModify == False && ktype == KTUnknown -> do
                         ktypeRes <- translatorExpression rvalue
                         pushStr $ case ktypeRes of
                             KTInt -> "istore " ++ show index
@@ -213,7 +214,19 @@ translatorExpression =
                             KTDouble -> "dstore " ++ show index
                             _ -> "astore " ++ show index
                         updateVariable name (\(name', _, index', canModify') -> (name', ktypeRes, index', canModify'))
-                        return KTUnknown
+                        return KTUnit
+                    | canModify == False ->  do
+                        pushStr $ "ERROR: variable " ++ varName ++ " cannot be modified"
+                        return KTUnit
+                    | otherwise -> do 
+                        ktypeRes <- translatorExpression rvalue
+                        pushStr $ case ktype of
+                            KTInt -> "istore " ++ show index
+                            KTLong -> "lstore " ++ show index
+                            KTDouble -> "dstore " ++ show index
+                            _ -> "astore " ++ show index
+                        updateVariable name (\(name', _, index', canModify') -> (name', ktype, index', canModify'))
+                        return KTUnit        
                 _ -> do 
                     pushStr $ "ERROR: variable " ++ varName ++ " was not found"
                     return KTUnknown
@@ -239,7 +252,7 @@ translatorExpression =
                                     KTLong -> pushStr $ "lastore"
                                     KTDouble -> pushStr $ "dastore"
                                     KTUserType _ -> pushStr $ "aastore"
-                        return KTUnknown
+                        return KTUnit
                 _ -> do 
                     pushStr "ERROR"
                     return KTUnknown
@@ -251,7 +264,7 @@ getKTypeFromFields (KTUserType nameUserType) ((Var nameField) : fields) = undefi
 getKTypeFromFields (KTArray ktypeArrayElem) (index : fields) = getKTypeFromFields ktypeArrayElem fields
 
 translatorGetFields :: [Expr] -> StateT TableLocalVariables (State [String]) KType
-translatorGetFields [] = return KTUnknown
+translatorGetFields [] = return KTUnit
 translatorGetFields ((Var nameField) : fields) = do
     pushStr $ "getfield " ++ nameField
     translatorGetFields fields
@@ -270,21 +283,19 @@ translatorFunPrimitive =
         ValInit name ktype -> do 
             lengthTableLocalVariables <- gets length
             pushLocal (name, ktype, lengthTableLocalVariables, False)
-            pushStr $ name ++ show ktype ++ show lengthTableLocalVariables
-            return KTUnknown
+            return KTUnit
         VarInit name ktype -> do 
             lengthTableLocalVariables <- gets length
             pushLocal (name, ktype, lengthTableLocalVariables, True)
-            pushStr $ name ++ show ktype ++ show lengthTableLocalVariables
-            return KTUnknown    
+            return KTUnit    
         Expression expr -> do
             translatorExpression expr 
         _ -> do
             pushStr "ERROR"
-            return KTUnknown
+            return KTUnit
 
 manyTranslatorFunPrimitive :: [FunPrimitive] -> StateT TableLocalVariables (State [String]) KType
-manyTranslatorFunPrimitive [] = return KTUnknown
+manyTranslatorFunPrimitive [] = return KTUnit
 manyTranslatorFunPrimitive [last] = translatorFunPrimitive last
 manyTranslatorFunPrimitive (f:fs) = do 
     ktype <- translatorFunPrimitive f
@@ -313,6 +324,8 @@ translateArgs ((Variable _ _ ktype):args) = kTypeToBaseType ktype ++ ";" ++ (tra
 translatorMethod :: Fun -> StateT TableLocalVariables (State [String]) ()
 translatorMethod (Fun {..})= do
     pushStr $ ".method public static " ++ (toLower `map` name) ++ "(" ++ translateArgs args ++ ")" ++ (kTypeToBaseType returnType)
+    pushStr $ ".limit stack " ++ show _maxStack
+    pushStr $ ".limit locals " ++ show _maxLocals
     ktype <- manyTranslatorFunPrimitive body
     case ktype of 
         KTInt -> pushStr "ireturn"
