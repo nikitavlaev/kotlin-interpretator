@@ -18,22 +18,24 @@ type LocalVariable = (String, KType, Int, Bool) -- (name, type, index, canModify
 
 type TableLocalVariables = [LocalVariable]
 
+type SuperState = StateT TableLocalVariables (StateT [String] (Reader Class))
+
 genUnqID :: String -> Int -> String 
 genUnqID prefix lineNum = prefix ++ show lineNum
 
-pushStr :: String -> StateT TableLocalVariables (State [String]) ()
+pushStr :: String -> SuperState ()
 pushStr newStr = lift $ modify (newStr : )
 
-updateVariable :: String -> (LocalVariable -> LocalVariable) -> StateT TableLocalVariables (State [String]) ()
+updateVariable :: String -> (LocalVariable -> LocalVariable) -> SuperState ()
 updateVariable nameVar funUpdating = modify (helper) where
     helper [] = []
     helper (var@(name, _, _, _) : vars) | name == nameVar = (funUpdating var) : vars
     helper (var : vars) = var : (helper vars)
 
-pushLocal :: (String, KType, Int, Bool) -> StateT TableLocalVariables (State [String]) ()
+pushLocal :: (String, KType, Int, Bool) -> SuperState ()
 pushLocal newL = modify (newL : )
 
-translatorBinOp :: Expr -> Expr -> String -> StateT TableLocalVariables (State [String]) KType
+translatorBinOp :: Expr -> Expr -> String -> SuperState KType
 translatorBinOp e1 e2 postfix = do
             ktype1 <- translatorExpression e1
             ktype2 <- translatorExpression e2
@@ -65,7 +67,7 @@ translatorBinOp e1 e2 postfix = do
                     pushStr "ERROR"
                     return KTUnknown 
 
-translatorExpression :: Expr -> StateT TableLocalVariables (State [String]) KType
+translatorExpression :: Expr -> SuperState KType
 translatorExpression = 
     \case 
         Val (KDInt val) 
@@ -199,6 +201,17 @@ translatorExpression =
             pushStr $ "iconst_0"
             pushStr $ "fi" ++ show lengthCurrentLines ++ ":"
             return KTInt
+        CallFun ('.' : nameFun) argsFun -> undefined -- TODO
+        CallFun nameFun args -> do
+            translatorFunArgs args
+            mainClass <- lift $ lift $ ask
+            case find ((== nameFun) . (name :: Fun -> String)) (methods mainClass) of
+                Just (Fun {..}) -> do
+                    pushStr $ "invokestatic Main/" ++ nameFun ++ "(" ++ translateArgs args ++ ")" ++ kTypeToBaseType returnType
+                    return returnType
+                Nothing -> do
+                    pushStr "ERROR"
+                    return KTUnknown
 
 getKTypeFromFields :: KType -> [Expr] -> KType
 getKTypeFromFields ktype [] = ktype
@@ -206,7 +219,13 @@ getKTypeFromFields (KTUserType nameUserType) ((Var nameField) : fields) = undefi
 -- because here we cannot get type of field in user's type
 getKTypeFromFields (KTArray ktypeArrayElem) (index : fields) = getKTypeFromFields ktypeArrayElem fields
 
-translatorGetFields :: [Expr] -> StateT TableLocalVariables (State [String]) KType
+translatorFunArgs :: [Expr] -> SuperState ()
+translatorFunArgs [] = return ()
+translatorFunArgs (arg : args) = do
+    translatorExpression arg
+    translatorFunArgs args
+
+translatorGetFields :: [Expr] -> SuperState KType
 translatorGetFields [] = return KTUnit
 translatorGetFields ((Var nameField) : fields) = do
     pushStr $ "getfield " ++ nameField
@@ -220,7 +239,7 @@ translatorGetFields (index : fields) = do
             currentLines <- lift get
             pushStr $ genUnqID "Label" (length currentLines)
             return KTUnknown-}
-translatorFunPrimitive :: FunPrimitive -> StateT TableLocalVariables (State [String]) KType
+translatorFunPrimitive :: FunPrimitive -> SuperState KType
 translatorFunPrimitive = 
     \case 
         ValInit name ktype -> do 
@@ -237,7 +256,7 @@ translatorFunPrimitive =
             pushStr "ERROR"
             return KTUnit
 
-manyTranslatorFunPrimitive :: [FunPrimitive] -> StateT TableLocalVariables (State [String]) KType
+manyTranslatorFunPrimitive :: [FunPrimitive] -> SuperState KType
 manyTranslatorFunPrimitive [] = return KTUnit
 manyTranslatorFunPrimitive [last] = translatorFunPrimitive last
 manyTranslatorFunPrimitive (f:fs) = do 
@@ -257,14 +276,14 @@ kTypeToBaseType =
         KTAny -> "Ljava/lang/Object"
         KTArray KTChar ->"Ljava/lang/String"
         KTArray t -> "[" ++ (kTypeToBaseType t)
-        KTUserType t -> "L" ++ t
+        KTUserType t -> "L" ++ t ++ ";"
         KTUnknown -> "ERROR"
 
 translateArgs :: [Variable] -> String
 translateArgs [] = []
-translateArgs ((Variable _ _ ktype):args) = kTypeToBaseType ktype ++ ";" ++ (translateArgs args) 
+translateArgs ((Variable _ _ ktype):args) = kTypeToBaseType ktype ++ (translateArgs args) 
 
-translatorMethod :: Fun -> StateT TableLocalVariables (State [String]) ()
+translatorMethod :: Fun -> SuperState ()
 translatorMethod (Fun {..})= do
     pushStr $ ".method public static " ++ (toLower `map` name) ++ "(" ++ translateArgs args ++ ")" ++ (kTypeToBaseType returnType)
     pushStr $ ".limit stack " ++ show _maxStack
@@ -276,7 +295,7 @@ translatorMethod (Fun {..})= do
         KTDouble -> pushStr "dreturn"
         KTUnit -> pushStr "return"
         _ -> pushStr "areturn"
-    pushStr $ ".end method"  
+    pushStr $ ".end method"
 
 {-
 type ConstantPool = [Constant]
@@ -337,6 +356,6 @@ translateHelloWorld name = do
     writeFile (name ++ ".j") helloWorldj
     return ()
 
-runTranslateExpression :: Expr -> TableLocalVariables -> [String]
-runTranslateExpression expr table = reverse $ execState (evalStateT (translatorExpression expr) table) []
+{-runTranslateExpression :: Expr -> TableLocalVariables -> [String]
+runTranslateExpression expr table = reverse $ execState (evalStateT (translatorExpression expr) table) []-}
 

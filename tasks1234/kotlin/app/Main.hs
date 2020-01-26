@@ -9,6 +9,7 @@ import Interpreter
 import Text.Parsec(parse)
 import Text.Pretty.Simple (pPrint)
 import Control.Monad.State.Lazy
+import Control.Monad.Reader
 
 
 runProgram :: (Show a) => Either a Class -> IO()
@@ -27,9 +28,9 @@ main = do
             ast <- return $ parse parseProgram "" $ removeComments program 0
             pPrint ast 
             case ast of 
-                (Right (Class _ _ (fun:funs) _ )) -> do 
-                                                let result = execState $ (runStateT $ translatorMethod fun) [] 
-                                                pPrint $ reverse $ result []
+                (Right mainClass@(Class _ _ (fun:funs) _ )) -> do 
+                                                let result = reverse $ runReader (execStateT (evalStateT (translatorMethod fun) []) []) mainClass
+                                                pPrint result
                 _ -> putStrLn "Unsupported program"                                 
         ("i":other) -> do       
             program <- readFile "test/test_program.kt"
