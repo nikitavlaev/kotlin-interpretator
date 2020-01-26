@@ -23,10 +23,12 @@ pushStr :: String -> StateT TableLocalVariables (State [String]) ()
 pushStr newStr = lift $ modify (newStr : )
 
 updateVariable :: String -> (LocalVariable -> LocalVariable) -> StateT TableLocalVariables (State [String]) KType
-updateVariable nameVar funUpdating = modify (helper) where
-    helper [] = []
-    helper (var@(name, _, _, _) : vars) | name == nameVar = (funUpdating var) : vars
-    helper (var : vars) = var : (helper vars)
+updateVariable nameVar funUpdating = do
+    modify (helper)
+    return KTUnknown where
+        helper [] = []
+        helper (var@(name, _, _, _) : vars) | name == nameVar = (funUpdating var) : vars
+        helper (var : vars) = var : (helper vars)
 
 pushLocal :: (String, KType, Int, Bool) -> StateT TableLocalVariables (State [String]) ()
 pushLocal newL = modify (newL : )
@@ -57,7 +59,9 @@ translatorExpression =
                         KTDouble -> "dload " ++ show index
                         _ -> "aload " ++ show index
                     return ktype
-                Nothing -> pushStr "ERROR"
+                Nothing -> do
+                    pushStr "ERROR"
+                    return KTUnknown
         CallFun ".get" ((Var varName) : fields) -> do
             tableLocalVariables <- get
             case find ((== varName) . sel1) tableLocalVariables of
@@ -78,7 +82,9 @@ translatorExpression =
                                 KTDouble -> "daload"
                                 _ -> "aaload"
                     return ktype
-                Nothing -> pushStr "ERROR"
+                Nothing -> do
+                    pushStr "ERROR"
+                    return KTUnknown
         Add e1 e2 -> do
             ktype1 <- translatorExpression e1
             ktype2 <- translatorExpression e2
@@ -212,7 +218,9 @@ translatorExpression =
                             _ -> "astore " ++ show index
                         updateVariable name (\(name', _, index', canModify') -> (name', ktypeRes, index', canModify'))
                         return KTUnknown
-                _ -> pushStr "ERROR"
+                _ -> do
+                    pushStr "ERROR"
+                    return KTUnknown
         CallFun ".set" (rvalue : (Var varName) : fields) -> do
             tableLocalVariables <- get
             case find ((== varName) . sel1) tableLocalVariables of
@@ -236,7 +244,32 @@ translatorExpression =
                                     KTDouble -> pushStr $ "dastore"
                                     KTUserType _ -> pushStr $ "aastore"
                         return KTUnknown
-                _ -> pushStr "ERROR"
+                _ -> do
+                    pushStr "ERROR"
+                    return KTUnknown
+        If cond thenBranch elseBranch -> do
+            lengthCurrentLines <- lift $ gets length
+            translatorExpression cond
+            pushStr $ "ifeq else" ++ show lengthCurrentLines
+            manyTranslatorFunPrimitive thenBranch
+            pushStr $ "goto fi" ++ show lengthCurrentLines
+            pushStr $ "else" ++ show lengthCurrentLines ++ ":"
+            manyTranslatorFunPrimitive elseBranch
+            pushStr $ "fi" ++ show lengthCurrentLines ++ ":"
+            return KTUnknown
+        Equal e1 e2 -> do
+            lengthCurrentLines <- lift $ gets length
+            ktype1 <- translatorExpression e1
+            ktype2 <- translatorExpression e2
+            pushStr $ case (ktype1, ktype2) of
+                (KTInt, KTInt) -> "if_icmpne else" ++ show lengthCurrentLines
+                _ -> "if_acmpne else" ++ show lengthCurrentLines
+            pushStr $ "iconst_1"
+            pushStr $ "goto fi" ++ show lengthCurrentLines
+            pushStr $ "else" ++ show lengthCurrentLines ++ ":"
+            pushStr $ "iconst_0"
+            pushStr $ "fi" ++ show lengthCurrentLines ++ ":"
+            return KTInt
 
 getKTypeFromFields :: KType -> [Expr] -> KType
 getKTypeFromFields ktype [] = ktype
