@@ -1,3 +1,3 @@
 fun Main() {
-  val a : Int = 3 
+  val a = 3 
 }  
