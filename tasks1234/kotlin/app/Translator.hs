@@ -13,18 +13,19 @@ import Data.Tuple.Select
 import Data.List
 import Data.Char
 import Debug.Trace
+import Control.Monad.Except
 
 type LocalVariable = (String, KType, Int, Bool) -- (name, type, index, canModify)
 
 type TableLocalVariables = [LocalVariable]
 
-type SuperState = StateT TableLocalVariables (StateT [String] (Reader Class))
+type SuperState = ExceptT String (StateT TableLocalVariables (StateT [String]  (Reader Class)))
 
 genUnqID :: String -> Int -> String 
 genUnqID prefix lineNum = prefix ++ show lineNum
 
 pushStr :: String -> SuperState ()
-pushStr newStr = lift $ modify (newStr : )
+pushStr newStr = lift $ lift $ modify (newStr : )
 
 updateVariable :: String -> (LocalVariable -> LocalVariable) -> SuperState ()
 updateVariable nameVar funUpdating = modify (helper) where
@@ -60,12 +61,7 @@ translatorBinOp e1 e2 postfix = do
                 (KTDouble, KTDouble) -> do
                     pushStr $ "d" ++ postfix
                     return KTLong
-                (KTUnknown, _) -> do 
-                    pushStr "ERROR"
-                    return KTUnknown
-                (_, KTUnknown) -> do 
-                    pushStr "ERROR"
-                    return KTUnknown 
+                _ -> throwError ("ERROR") 
 
 translatorExpression :: Expr -> SuperState KType
 translatorExpression = 
@@ -93,17 +89,15 @@ translatorExpression =
                         KTDouble -> "dload " ++ show index
                         _ -> "aload " ++ show index
                     return ktype
-                Nothing -> do
-                    pushStr "ERROR"
-                    return KTUnknown
+                Nothing -> throwError $ "Variable " ++ varName ++ " not found"
         CallFun ".get" ((Var varName) : fields) -> do
             tableLocalVariables <- get
             case find ((== varName) . sel1) tableLocalVariables of
                 Just (name, ktype, index, canModify) -> do
-                    pushStr $ case ktype of
-                        KTUserType nameUserType -> "aload " ++ show index
-                        KTArray ktypeArrayElem -> "aload " ++ show index
-                        _ -> "ERROR"
+                    case ktype of
+                        KTUserType nameUserType -> pushStr $ "aload " ++ show index
+                        KTArray ktypeArrayElem -> pushStr $ "aload " ++ show index
+                        _ -> throwError "Unsupported type"
                     translatorGetFields $ init fields
                     case last fields of
                         Var nameLastField ->
@@ -116,9 +110,7 @@ translatorExpression =
                                 KTDouble -> "daload"
                                 _ -> "aaload"
                     return ktype
-                Nothing -> do
-                    pushStr "ERROR"
-                    return KTUnknown
+                Nothing -> throwError $ "Variable " ++ varName ++ " not found"
         Add e1 e2 -> translatorBinOp e1 e2 "add"  
         Sub e1 e2 -> translatorBinOp e1 e2 "sub"
         Mul e1 e2 -> translatorBinOp e1 e2 "mul"
@@ -137,9 +129,7 @@ translatorExpression =
                             _ -> "astore " ++ show index
                         updateVariable name (\(name', _, index', canModify') -> (name', ktypeRes, index', canModify'))
                         return KTUnit
-                    | canModify == False ->  do
-                        pushStr $ "ERROR: variable " ++ varName ++ " cannot be modified"
-                        return KTUnit
+                    | canModify == False -> throwError $ "Cannot modify " ++ name
                     | otherwise -> do 
                         ktypeRes <- translatorExpression rvalue
                         pushStr $ case ktype of
@@ -149,9 +139,7 @@ translatorExpression =
                             _ -> "astore " ++ show index
                         updateVariable name (\(name', _, index', canModify') -> (name', ktype, index', canModify'))
                         return KTUnit        
-                _ -> do 
-                    pushStr $ "ERROR: variable " ++ varName ++ " was not found"
-                    return KTUnknown
+                _ -> throwError $ "Variable " ++ varName ++ " not found"
         CallFun ".set" (rvalue : (Var varName) : fields) -> do
             tableLocalVariables <- get
             case find ((== varName) . sel1) tableLocalVariables of
@@ -160,7 +148,7 @@ translatorExpression =
                         case ktype of
                             KTUserType nameUserType -> pushStr $ "aload " ++ show index
                             KTArray ktypeArrayElem -> pushStr $ "aload " ++ show index
-                            _ -> pushStr "ERROR"
+                            _ -> throwError "Unsupported type"
                         translatorGetFields $ init fields
                         case last fields of
                             Var nameLastField -> do
@@ -175,9 +163,7 @@ translatorExpression =
                                     KTDouble -> pushStr $ "dastore"
                                     KTUserType _ -> pushStr $ "aastore"
                         return KTUnit
-                _ -> do 
-                    pushStr "ERROR"
-                    return KTUnknown
+                _ -> throwError $ "Variable " ++ varName ++ " not found"
         If cond thenBranch elseBranch -> do
             lengthCurrentLines <- lift $ gets length
             translatorExpression cond
@@ -209,9 +195,8 @@ translatorExpression =
                 Just (Fun {..}) -> do
                     pushStr $ "invokestatic Main/" ++ nameFun ++ "(" ++ translateArgs args ++ ")" ++ kTypeToBaseType returnType
                     return returnType
-                Nothing -> do
-                    pushStr "ERROR"
-                    return KTUnknown
+                Nothing -> throwError $ "Fun " ++ nameFun ++ " not found"
+        _ -> throwError "Unsupported operator"        
 
 getKTypeFromFields :: KType -> [Expr] -> KType
 getKTypeFromFields ktype [] = ktype
@@ -252,9 +237,7 @@ translatorFunPrimitive =
             return KTUnit    
         Expression expr -> do
             translatorExpression expr 
-        _ -> do
-            pushStr "ERROR"
-            return KTUnit
+        _ -> throwError $ "Unsupported statement"
 
 manyTranslatorFunPrimitive :: [FunPrimitive] -> SuperState KType
 manyTranslatorFunPrimitive [] = return KTUnit
@@ -283,11 +266,18 @@ translateArgs :: [Variable] -> String
 translateArgs [] = []
 translateArgs ((Variable _ _ ktype):args) = kTypeToBaseType ktype ++ (translateArgs args) 
 
+localStoreArgs :: [Variable] -> SuperState ()
+localStoreArgs [] = return ()
+localStoreArgs ((Variable {..}):args) = do 
+        lengthTableLocalVariables <- gets length
+        pushLocal (varName, varType, lengthTableLocalVariables, varMutable)
+
 translatorMethod :: Fun -> SuperState ()
 translatorMethod (Fun {..})= do
     pushStr $ ".method public static " ++ (toLower `map` name) ++ "(" ++ translateArgs args ++ ")" ++ (kTypeToBaseType returnType)
     pushStr $ ".limit stack " ++ show _maxStack
     pushStr $ ".limit locals " ++ show _maxLocals
+    localStoreArgs args
     ktype <- manyTranslatorFunPrimitive body
     case ktype of 
         KTInt -> pushStr "ireturn"
