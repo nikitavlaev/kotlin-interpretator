@@ -165,6 +165,35 @@ translatorExpression =
                 (KTDouble, KTDouble) -> do
                     pushStr "drem"
                     return KTLong
+        CallFun ".set" (rvalue : (Var varName) : fields) -> do
+            tableLocalVariables <- get
+            case find ((== varName) . fst3) tableLocalVariables of
+                Just (name, ktype, index) -> do
+                    case ktype of
+                        KTUserType nameUserType -> pushStr $ "aload " ++ show index
+                        KTArray ktypeArrayElem -> pushStr $ "aload " ++ show index
+                        _ -> undefined
+                    translatorGetFields $ init fields
+                    {-case ktypeRes of
+                        KTInt -> pushStr $ "istore " ++ show index
+                        KTLong -> pushStr $ "lstore " ++ show (trd3 var)
+                        KTDouble -> pushStr $ "dstore " ++ show (trd3 var)
+                        KTUserType nameUserType -> pushStr $ "astore " ++ show (trd3 var)
+                        _ -> undefined-}
+                    case last fields of
+                        Var nameLastField -> do
+                            ktypeRes <- translatorExpression rvalue
+                            pushStr $ "putfield " ++ nameLastField
+                        indexInArray -> do
+                            translatorExpression indexInArray
+                            ktypeRes <- translatorExpression rvalue
+                            case ktypeRes of
+                                KTInt -> pushStr $ "iastore"
+                                KTLong -> pushStr $ "lastore"
+                                KTDouble -> pushStr $ "dastore"
+                                KTUserType _ -> pushStr $ "aastore"
+                    return KTUnknown
+                Nothing -> undefined
 
 {-
 type ConstantPool = [Constant]
