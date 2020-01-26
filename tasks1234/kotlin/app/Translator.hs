@@ -20,32 +20,25 @@ pushStr newStr = lift $ modify (newStr : )
 translatorExpression :: Expr -> StateT TableLocalVariables (State [String]) KType
 translatorExpression = 
     \case 
-        {-Val (KDByte val) -> do
-            pushStr $ "bipush " ++ show val
-            return KTByte
-        Val (KDShort val) -> do
-            pushStr $ "sipush " ++ show val
-            return KTShort-}
-        Val (KDInt val) -> do
-            pushStr $ "ldc " ++ show val
-            return KTInt
-        {-Val (KDLong val) -> do
-            pushStr $ "ldc_w " ++ show val
-            return KTLong-}
+        Val (KDInt val) 
+            | (abs val < 2^31) -> do
+                pushStr $ "ldc " ++ show val
+                return KTInt
+            | otherwise -> do
+                pushStr $ "ldc_w " ++ show val
+                return KTLong   
         Val (KDArray str@((KDChar c) : cs)) -> do
             pushStr $ "ldc " ++ (getChar <$> str)
             return $ KTArray KTChar
-        {-Val (KDDouble val) -> do
+        Val (KDDouble val) -> do
             pushStr $ "ldc_w " ++ show val
-            return KTDouble-}
+            return KTDouble
         CallFun ".get" [Var varName] -> do
             tableLocalVariables <- get
             case find ((== varName) . fst3) tableLocalVariables of
                 Just var -> do
                     let ktype = snd3 var
                     pushStr $ case ktype of
-                        KTByte -> "iload " ++ show (thd3 var)
-                        KTShort -> "iload " ++ show (thd3 var)
                         KTInt -> "iload " ++ show (thd3 var)
                         KTLong -> "lload " ++ show (thd3 var)
                         KTDouble -> "dload " ++ show (thd3 var)
