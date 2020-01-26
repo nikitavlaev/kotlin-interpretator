@@ -9,13 +9,19 @@ import Ast
 import Control.Monad.Reader
 import Control.Monad.State.Lazy
 import System.IO hiding (getChar)
-import Data.Tuple.Utils
+import Data.Tuple.Select
 import Data.List
 
-type TableLocalVariables = [(String, KType, Int)] -- (name, type, index)
+type TableLocalVariables = [(String, KType, Int, Bool)] -- (name, type, index)
+
+genUnqID :: String -> Int -> String 
+genUnqID prefix lineNum = prefix ++ show lineNum
 
 pushStr :: String -> StateT TableLocalVariables (State [String]) ()
 pushStr newStr = lift $ modify (newStr : )
+
+pushLocal :: (String, KType, Int, Bool) -> StateT TableLocalVariables (State [String]) ()
+pushLocal newL = modify (newL : )
 
 translatorExpression :: Expr -> StateT TableLocalVariables (State [String]) KType
 translatorExpression = 
@@ -35,14 +41,14 @@ translatorExpression =
             return KTDouble
         CallFun ".get" [Var varName] -> do
             tableLocalVariables <- get
-            case find ((== varName) . fst3) tableLocalVariables of
+            case find ((== varName) . sel1) tableLocalVariables of
                 Just var -> do
-                    let ktype = snd3 var
+                    let ktype = sel2 var
                     pushStr $ case ktype of
-                        KTInt -> "iload " ++ show (thd3 var)
-                        KTLong -> "lload " ++ show (thd3 var)
-                        KTDouble -> "dload " ++ show (thd3 var)
-                        _ -> "aload " ++ show (thd3 var)
+                        KTInt -> "iload " ++ show (sel3 var)
+                        KTLong -> "lload " ++ show (sel3 var)
+                        KTDouble -> "dload " ++ show (sel3 var)
+                        _ -> "aload " ++ show (sel3 var)
                     return ktype
                 Nothing -> undefined
         Add e1 e2 -> do
@@ -164,8 +170,36 @@ translatorExpression =
                     return KTLong
                 (KTDouble, KTDouble) -> do
                     pushStr "drem"
-                    return KTLong
+                    return KTLong            
+        {-And e1 e2 -> do 
+            currentLines <- lift get
+            pushStr $ genUnqID "Label" (length currentLines)
+            return KTUnknown-}
+translatorFunPrimitive :: FunPrimitive -> StateT TableLocalVariables (State [String]) KType
+translatorFunPrimitive = 
+    \case 
+        ValInit name ktype -> do 
+            lengthTableLocalVariables <- gets length
+            pushLocal (name, ktype, lengthTableLocalVariables, False)
+            pushStr $ name ++ show ktype ++ show lengthTableLocalVariables
+            return KTUnknown
+        VarInit name ktype -> do 
+            lengthTableLocalVariables <- gets length
+            pushLocal (name, ktype, lengthTableLocalVariables, True)
+            pushStr $ name ++ show ktype ++ show lengthTableLocalVariables
+            return KTUnknown    
+        Expression expr -> do
+            translatorExpression expr 
+        _ -> do
+            pushStr "ERROR"
+            return KTUnknown
 
+manyTranslatorFunPrimitive :: [FunPrimitive] -> StateT TableLocalVariables (State [String]) KType
+manyTranslatorFunPrimitive [] = return KTUnknown
+manyTranslatorFunPrimitive [last] = translatorFunPrimitive last
+manyTranslatorFunPrimitive (f:fs) = do 
+    ktype <- translatorFunPrimitive f
+    manyTranslatorFunPrimitive fs 
 {-
 type ConstantPool = [Constant]
 
