@@ -27,8 +27,8 @@ main = do
             ast <- return $ parse parseProgram "" $ removeComments program 0
             pPrint ast 
             case ast of 
-                (Right (Class _ _ ((Fun _ _ _ (((Expression expr):next)):other)) _ )) -> do 
-                                                let result = execState $ (runStateT $ translatorExpression expr) [] 
+                (Right (Class _ _ ((Fun _ _ _ body):funs) _ )) -> do 
+                                                let result = execState $ (runStateT $ manyTranslatorFunPrimitive body) [] 
                                                 pPrint $ result []
                 _ -> putStrLn "Unsupported program"                                 
         ("i":other) -> do       
