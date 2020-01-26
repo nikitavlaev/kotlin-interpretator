@@ -11,6 +11,7 @@ import Control.Monad.State.Lazy
 import System.IO hiding (getChar)
 import Data.Tuple.Select
 import Data.List
+import Data.Char
 
 type LocalVariable = (String, KType, Int, Bool) -- (name, type, index, canModify)
 
@@ -22,7 +23,7 @@ genUnqID prefix lineNum = prefix ++ show lineNum
 pushStr :: String -> StateT TableLocalVariables (State [String]) ()
 pushStr newStr = lift $ modify (newStr : )
 
-updateVariable :: String -> (LocalVariable -> LocalVariable) -> StateT TableLocalVariables (State [String]) KType
+updateVariable :: String -> (LocalVariable -> LocalVariable) -> StateT TableLocalVariables (State [String]) ()
 updateVariable nameVar funUpdating = modify (helper) where
     helper [] = []
     helper (var@(name, _, _, _) : vars) | name == nameVar = (funUpdating var) : vars
@@ -57,7 +58,9 @@ translatorExpression =
                         KTDouble -> "dload " ++ show index
                         _ -> "aload " ++ show index
                     return ktype
-                Nothing -> pushStr "ERROR"
+                Nothing -> do 
+                    pushStr "ERROR"
+                    return KTUnknown
         CallFun ".get" ((Var varName) : fields) -> do
             tableLocalVariables <- get
             case find ((== varName) . sel1) tableLocalVariables of
@@ -78,7 +81,9 @@ translatorExpression =
                                 KTDouble -> "daload"
                                 _ -> "aaload"
                     return ktype
-                Nothing -> pushStr "ERROR"
+                Nothing -> do 
+                    pushStr "ERROR"
+                    return KTUnknown
         Add e1 e2 -> do
             ktype1 <- translatorExpression e1
             ktype2 <- translatorExpression e2
@@ -144,10 +149,7 @@ translatorExpression =
                     pushStr "i2l"
                     pushStr $ "lload " ++ show lengthTableLocalVariables
                     pushStr "lmul"
-                    return KTLong
-                (KTLong, KTLong) -> do
-                    pushStr "lmul"
-                    return KTLong
+                    return KTLong 
                 (KTDouble, KTDouble) -> do
                     pushStr "dmul"
                     return KTLong
@@ -212,7 +214,9 @@ translatorExpression =
                             _ -> "astore " ++ show index
                         updateVariable name (\(name', _, index', canModify') -> (name', ktypeRes, index', canModify'))
                         return KTUnknown
-                _ -> pushStr "ERROR"
+                _ -> do 
+                    pushStr $ "ERROR: variable " ++ varName ++ " was not found"
+                    return KTUnknown
         CallFun ".set" (rvalue : (Var varName) : fields) -> do
             tableLocalVariables <- get
             case find ((== varName) . sel1) tableLocalVariables of
@@ -236,7 +240,9 @@ translatorExpression =
                                     KTDouble -> pushStr $ "dastore"
                                     KTUserType _ -> pushStr $ "aastore"
                         return KTUnknown
-                _ -> pushStr "ERROR"
+                _ -> do 
+                    pushStr "ERROR"
+                    return KTUnknown
 
 getKTypeFromFields :: KType -> [Expr] -> KType
 getKTypeFromFields ktype [] = ktype
@@ -283,6 +289,39 @@ manyTranslatorFunPrimitive [last] = translatorFunPrimitive last
 manyTranslatorFunPrimitive (f:fs) = do 
     ktype <- translatorFunPrimitive f
     manyTranslatorFunPrimitive fs 
+
+_maxStack = 1024
+_maxLocals = 1024    
+
+kTypeToBaseType :: KType -> String
+kTypeToBaseType = 
+    \case 
+        KTInt -> "I"
+        KTDouble -> "D"
+        KTLong -> "J"
+        KTUnit -> "V"
+        KTAny -> "Ljava/lang/Object"
+        KTArray KTChar ->"Ljava/lang/String"
+        KTArray t -> "[" ++ (kTypeToBaseType t)
+        KTUserType t -> "L" ++ t
+        KTUnknown -> "ERROR"
+
+translateArgs :: [Variable] -> String
+translateArgs [] = []
+translateArgs ((Variable _ _ ktype):args) = kTypeToBaseType ktype ++ ";" ++ (translateArgs args) 
+
+translatorMethod :: Fun -> StateT TableLocalVariables (State [String]) ()
+translatorMethod (Fun {..})= do
+    pushStr $ ".method public static " ++ (toLower `map` name) ++ "(" ++ translateArgs args ++ ")" ++ (kTypeToBaseType returnType)
+    ktype <- manyTranslatorFunPrimitive body
+    case ktype of 
+        KTInt -> pushStr "ireturn"
+        KTLong -> pushStr "lreturn"
+        KTDouble -> pushStr "dreturn"
+        KTUnit -> pushStr "return"
+        _ -> pushStr "areturn"
+    pushStr $ ".end method"  
+
 {-
 type ConstantPool = [Constant]
 
