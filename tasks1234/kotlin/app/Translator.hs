@@ -12,13 +12,21 @@ import System.IO hiding (getChar)
 import Data.Tuple.Select
 import Data.List
 
-type TableLocalVariables = [(String, KType, Int, Bool)] -- (name, type, index, canModify)
+type LocalVariable = (String, KType, Int, Bool) -- (name, type, index, canModify)
+
+type TableLocalVariables = [LocalVariable]
 
 genUnqID :: String -> Int -> String 
 genUnqID prefix lineNum = prefix ++ show lineNum
 
 pushStr :: String -> StateT TableLocalVariables (State [String]) ()
 pushStr newStr = lift $ modify (newStr : )
+
+updateVariable :: String -> (LocalVariable -> LocalVariable) -> StateT TableLocalVariables (State [String]) KType
+updateVariable nameVar funUpdating = modify (helper) where
+    helper [] = []
+    helper (var@(name, _, _, _) : vars) | name == nameVar = (funUpdating var) : vars
+    helper (var : vars) = var : (helper vars)
 
 pushLocal :: (String, KType, Int, Bool) -> StateT TableLocalVariables (State [String]) ()
 pushLocal newL = modify (newL : )
@@ -42,15 +50,35 @@ translatorExpression =
         CallFun ".get" [Var varName] -> do
             tableLocalVariables <- get
             case find ((== varName) . sel1) tableLocalVariables of
-                Just var -> do
-                    let ktype = sel2 var
+                Just (name, ktype, index, canModify) -> do
                     pushStr $ case ktype of
-                        KTInt -> "iload " ++ show (sel3 var)
-                        KTLong -> "lload " ++ show (sel3 var)
-                        KTDouble -> "dload " ++ show (sel3 var)
-                        _ -> "aload " ++ show (sel3 var)
+                        KTInt -> "iload " ++ show index
+                        KTLong -> "lload " ++ show index
+                        KTDouble -> "dload " ++ show index
+                        _ -> "aload " ++ show index
                     return ktype
-                Nothing -> undefined
+                Nothing -> pushStr "ERROR"
+        CallFun ".get" ((Var varName) : fields) -> do
+            tableLocalVariables <- get
+            case find ((== varName) . sel1) tableLocalVariables of
+                Just (name, ktype, index, canModify) -> do
+                    pushStr $ case ktype of
+                        KTUserType nameUserType -> "aload " ++ show index
+                        KTArray ktypeArrayElem -> "aload " ++ show index
+                        _ -> "ERROR"
+                    translatorGetFields $ init fields
+                    case last fields of
+                        Var nameLastField ->
+                            pushStr $ "getfield " ++ nameLastField
+                        indexInArray -> do
+                            translatorExpression indexInArray
+                            pushStr $ case getKTypeFromFields ktype fields of
+                                KTInt -> "iaload"
+                                KTLong -> "laload"
+                                KTDouble -> "daload"
+                                _ -> "aaload"
+                    return ktype
+                Nothing -> pushStr "ERROR"
         Add e1 e2 -> do
             ktype1 <- translatorExpression e1
             ktype2 <- translatorExpression e2
@@ -171,44 +199,60 @@ translatorExpression =
                 (KTDouble, KTDouble) -> do
                     pushStr "drem"
                     return KTLong
+        CallFun ".set" (rvalue : (Var varName) : []) -> do
+            tableLocalVariables <- get
+            case find ((== varName) . sel1) tableLocalVariables of
+                Just (name, ktype, index, canModify)
+                    | canModify == True || ktype == KTUnknown -> do
+                        ktypeRes <- translatorExpression rvalue
+                        pushStr $ case ktypeRes of
+                            KTInt -> "istore " ++ show index
+                            KTLong -> "lstore " ++ show index
+                            KTDouble -> "dstore " ++ show index
+                            _ -> "astore " ++ show index
+                        updateVariable name (\(name', _, index', canModify') -> (name', ktypeRes, index', canModify'))
+                        return KTUnknown
+                _ -> pushStr "ERROR"
         CallFun ".set" (rvalue : (Var varName) : fields) -> do
             tableLocalVariables <- get
             case find ((== varName) . sel1) tableLocalVariables of
-                Just (name, ktype, index, canModify) -> do
-                    case ktype of
-                        KTUserType nameUserType -> pushStr $ "aload " ++ show index
-                        KTArray ktypeArrayElem -> pushStr $ "aload " ++ show index
-                        _ -> undefined
-                    translatorGetFields $ init fields
-                    {-case ktypeRes of
-                        KTInt -> pushStr $ "istore " ++ show index
-                        KTLong -> pushStr $ "lstore " ++ show (trd3 var)
-                        KTDouble -> pushStr $ "dstore " ++ show (trd3 var)
-                        KTUserType nameUserType -> pushStr $ "astore " ++ show (trd3 var)
-                        _ -> undefined-}
-                    case last fields of
-                        Var nameLastField -> do
-                            ktypeRes <- translatorExpression rvalue
-                            pushStr $ "putfield " ++ nameLastField
-                        indexInArray -> do
-                            translatorExpression indexInArray
-                            ktypeRes <- translatorExpression rvalue
-                            case ktypeRes of
-                                KTInt -> pushStr $ "iastore"
-                                KTLong -> pushStr $ "lastore"
-                                KTDouble -> pushStr $ "dastore"
-                                KTUserType _ -> pushStr $ "aastore"
-                    return KTUnknown
-                Nothing -> undefined
+                Just (name, ktype, index, canModify)
+                    | canModify == True || ktype == KTUnknown -> do
+                        case ktype of
+                            KTUserType nameUserType -> pushStr $ "aload " ++ show index
+                            KTArray ktypeArrayElem -> pushStr $ "aload " ++ show index
+                            _ -> pushStr "ERROR"
+                        translatorGetFields $ init fields
+                        case last fields of
+                            Var nameLastField -> do
+                                ktypeRes <- translatorExpression rvalue
+                                pushStr $ "putfield " ++ nameLastField
+                            indexInArray -> do
+                                translatorExpression indexInArray
+                                ktypeRes <- translatorExpression rvalue
+                                case ktypeRes of
+                                    KTInt -> pushStr $ "iastore"
+                                    KTLong -> pushStr $ "lastore"
+                                    KTDouble -> pushStr $ "dastore"
+                                    KTUserType _ -> pushStr $ "aastore"
+                        return KTUnknown
+                _ -> pushStr "ERROR"
+
+getKTypeFromFields :: KType -> [Expr] -> KType
+getKTypeFromFields ktype [] = ktype
+getKTypeFromFields (KTUserType nameUserType) ((Var nameField) : fields) = undefined -- TODO,
+-- because here we cannot get type of field in user's type
+getKTypeFromFields (KTArray ktypeArrayElem) (index : fields) = getKTypeFromFields ktypeArrayElem fields
 
 translatorGetFields :: [Expr] -> StateT TableLocalVariables (State [String]) KType
 translatorGetFields [] = return KTUnknown
 translatorGetFields ((Var nameField) : fields) = do
     pushStr $ "getfield " ++ nameField
     translatorGetFields fields
-translatorGetGields (index : fields) = do
+translatorGetFields (index : fields) = do
     translatorExpression index
     pushStr $ "aaload"
+    translatorGetFields fields
 
         {-And e1 e2 -> do 
             currentLines <- lift get
