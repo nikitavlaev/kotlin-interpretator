@@ -21,11 +21,11 @@ main :: IO ()
 main = do
     args <- getArgs
     case args of
-        ("t":folder:name:other) -> do
+        ("t":folder:name:programName:other) -> do
             {-translateHelloWorld name
             putStrLn $ "Translator finished " ++ name-}
             -- program <- readFile "test/test_translator.kt"
-            program <- readFile "test/test_program.kt"
+            program <- readFile $ folder ++ "/" ++ programName
             putStrLn $ removeComments program 0
             ast <- return $ parse parseProgram "" $ removeComments program 0
             pPrint ast 
