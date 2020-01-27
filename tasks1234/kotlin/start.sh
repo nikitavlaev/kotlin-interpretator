@@ -1,9 +1,9 @@
 #!/bin/bash
 read -p "Write 'i' to start interpretator, 't' to start translator: " Input
-Name="test_jasmin"
+Name="Main"
 InFolder="test"
 OutFolder="jsmClasses"
-stack run -- $Input "$InFolder/$Name"
+stack run -- $Input $InFolder $Name 
 if [ "$Input" == "t" ]; then 
 if [ -f "$OutFolder\$Name.class" ] #if exists
 then rm "$OutFolder\$Name.class"

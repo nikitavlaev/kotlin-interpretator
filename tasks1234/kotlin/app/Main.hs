@@ -20,7 +20,7 @@ main :: IO ()
 main = do
     args <- getArgs
     case args of
-        ("t":name:other) -> do
+        ("t":folder:name:other) -> do
             {-translateHelloWorld name
             putStrLn $ "Translator finished " ++ name-}
             program <- readFile "test/test_translator.kt"
@@ -28,13 +28,14 @@ main = do
             ast <- return $ parse parseProgram "" $ removeComments program 0
             pPrint ast 
             case ast of 
-                (Right mainClass@(Class _ _ (fun:funs) _ )) -> do 
-                                                let result = evalStateT (runExceptT $ translatorMethod fun) []
-                                                case (runReader (evalStateT result []) mainClass) of
-                                                    (Left m) -> putStrLn m 
-                                                    (Right smth) -> do 
-                                                        let code = reverse $ runReader (execStateT result []) mainClass     
-                                                        pPrint code
+                (Right mainClass) -> do 
+                            let result = evalStateT (runExceptT $ translatorClass name mainClass) []
+                            case (runReader (evalStateT result []) mainClass) of
+                                (Left m) -> putStrLn m 
+                                (Right smth) -> do 
+                                    let code = reverse $ runReader (execStateT result []) mainClass     
+                                    pPrint code
+                                    writeFile (folder ++ "/" ++ name ++ ".j") $ concat code
                 _ -> putStrLn "Unsupported program"                                 
         ("i":other) -> do       
             program <- readFile "test/test_program.kt"

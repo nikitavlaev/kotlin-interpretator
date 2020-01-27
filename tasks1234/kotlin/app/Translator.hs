@@ -25,7 +25,7 @@ genUnqID :: String -> Int -> String
 genUnqID prefix lineNum = prefix ++ show lineNum
 
 pushStr :: String -> SuperState ()
-pushStr newStr = lift $ lift $ modify (newStr : )
+pushStr newStr = lift $ lift $ modify ((newStr ++ "\n"): )
 
 updateVariable :: String -> (LocalVariable -> LocalVariable) -> SuperState ()
 updateVariable nameVar funUpdating = modify (helper) where
@@ -49,7 +49,7 @@ translatorBinOp e1 e2 postfix = do
                     pushStr $ "l" ++ postfix
                     return KTLong
                 (KTInt, KTLong) -> do
-                    lengthTableLocalVariables <- gets length
+                    lengthTableLocalVariables <- lift $ gets length
                     pushStr $ "lstore " ++ show lengthTableLocalVariables
                     pushStr "i2l"
                     pushStr $ "lload " ++ show lengthTableLocalVariables
@@ -74,7 +74,7 @@ translatorExpression =
                 pushStr $ "ldc_w " ++ show val
                 return KTLong   
         Val (KDArray str@((KDChar c) : cs)) -> do
-            pushStr $ "ldc " ++ (getChar <$> str)
+            pushStr $ "ldc " ++ ['"'] ++ (getChar <$> str) ++ ['"']
             return $ KTArray KTChar
         Val (KDDouble val) -> do
             pushStr $ "ldc_w " ++ show val
@@ -90,14 +90,22 @@ translatorExpression =
                         _ -> "aload " ++ show index
                     return ktype
                 Nothing -> throwError $ "Variable " ++ varName ++ " not found"
-        CallFun ".get" ((Var varName) : fields) -> do
-            tableLocalVariables <- get
-            case find ((== varName) . sel1) tableLocalVariables of
-                Just (name, ktype, index, canModify) -> do
-                    case ktype of
-                        KTUserType nameUserType -> pushStr $ "aload " ++ show index
-                        KTArray ktypeArrayElem -> pushStr $ "aload " ++ show index
-                        _ -> throwError "Unsupported type"
+        CallFun ".get" (variable : fields) -> do --TODO FIX!
+            ktype <- case variable of 
+                (Var varName) -> do        
+                    tableLocalVariables <- get
+                    case find ((== varName) . sel1) tableLocalVariables of
+                        Just (name, ktype, index, canModify) -> do
+                            case ktype of
+                                KTUserType nameUserType -> pushStr $ "aload " ++ show index
+                                KTArray ktypeArrayElem -> pushStr $ "aload " ++ show index
+                                _ -> throwError "Unsupported type"
+                            return ktype
+                        Nothing -> throwError $ "Variable " ++ varName ++ " not found"
+                _ -> translatorExpression variable        
+            case fields of
+                [] -> return ktype 
+                _ -> do
                     translatorGetFields $ init fields
                     case last fields of
                         Var nameLastField ->
@@ -109,8 +117,7 @@ translatorExpression =
                                 KTLong -> "laload"
                                 KTDouble -> "daload"
                                 _ -> "aaload"
-                    return ktype
-                Nothing -> throwError $ "Variable " ++ varName ++ " not found"
+                    return ktype             
         Add e1 e2 -> translatorBinOp e1 e2 "add"  
         Sub e1 e2 -> translatorBinOp e1 e2 "sub"
         Mul e1 e2 -> translatorBinOp e1 e2 "mul"
@@ -165,17 +172,18 @@ translatorExpression =
                         return KTUnit
                 _ -> throwError $ "Variable " ++ varName ++ " not found"
         If cond thenBranch elseBranch -> do
-            lengthCurrentLines <- lift $ gets length
             translatorExpression cond
+            lengthCurrentLines <- lift $ lift $ gets length
             pushStr $ "ifeq else" ++ show lengthCurrentLines
-            manyTranslatorFunPrimitive thenBranch
+            ktype1 <- manyTranslatorFunPrimitive thenBranch
             pushStr $ "goto fi" ++ show lengthCurrentLines
             pushStr $ "else" ++ show lengthCurrentLines ++ ":"
-            manyTranslatorFunPrimitive elseBranch
+            ktype2 <- manyTranslatorFunPrimitive elseBranch
             pushStr $ "fi" ++ show lengthCurrentLines ++ ":"
-            return KTUnknown
+            --TODO fix types
+            return ktype1
         Equal e1 e2 -> do
-            lengthCurrentLines <- lift $ gets length
+            lengthCurrentLines <- lift $ lift $ gets length
             ktype1 <- translatorExpression e1
             ktype2 <- translatorExpression e2
             pushStr $ case (ktype1, ktype2) of
@@ -187,13 +195,22 @@ translatorExpression =
             pushStr $ "iconst_0"
             pushStr $ "fi" ++ show lengthCurrentLines ++ ":"
             return KTInt
-        CallFun ('.' : nameFun) argsFun -> undefined -- TODO
+        CallFun (".toBool") [arg]-> translatorExpression arg--TODO   
+        CallFun ('.' : nameFun) argsFun -> throwError nameFun -- TODO
+        CallFun "println" [message] -> do
+            pushStr "getstatic java/lang/System/out Ljava/io/PrintStream;"
+            ktype <- translatorExpression message
+            case ktype of 
+                (KTArray KTChar) -> do 
+                    pushStr "invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V"
+                    return KTUnit
+                _ -> throwError "Wrong println argument"    
         CallFun nameFun args -> do
             translatorFunArgs args
             mainClass <- lift $ lift $ ask
             case find ((== nameFun) . (name :: Fun -> String)) (methods mainClass) of
-                Just (Fun {..}) -> do
-                    pushStr $ "invokestatic Main/" ++ nameFun ++ "(" ++ translateArgs args ++ ")" ++ kTypeToBaseType returnType
+                Just (Fun {..}) -> do --TODO get mainClassName
+                    pushStr $ "invokestatic jsmClasses/Main/" ++ (toLower `map` nameFun) ++ "(" ++ translateArgs args ++ ")" ++ kTypeToBaseType returnType
                     return returnType
                 Nothing -> throwError $ "Fun " ++ nameFun ++ " not found"
         _ -> throwError "Unsupported operator"        
@@ -256,15 +273,15 @@ kTypeToBaseType =
         KTDouble -> "D"
         KTLong -> "J"
         KTUnit -> "V"
-        KTAny -> "Ljava/lang/Object"
-        KTArray KTChar ->"Ljava/lang/String"
+        KTAny -> "Ljava/lang/Object;"
+        KTArray KTChar ->"Ljava/lang/String;"
         KTArray t -> "[" ++ (kTypeToBaseType t)
         KTUserType t -> "L" ++ t ++ ";"
         KTUnknown -> "ERROR"
 
 translateArgs :: [Variable] -> String
 translateArgs [] = []
-translateArgs ((Variable _ _ ktype):args) = kTypeToBaseType ktype ++ (translateArgs args) 
+translateArgs ((Variable _ _ ktype):args) = kTypeToBaseType ktype ++ (translateArgs args)
 
 localStoreArgs :: [Variable] -> SuperState ()
 localStoreArgs [] = return ()
@@ -287,6 +304,19 @@ translatorMethod (Fun {..})= do
         _ -> pushStr "areturn"
     pushStr $ ".end method"
 
+--TODO:Add fields, nested Classes
+translatorClass :: String -> Class -> SuperState ()
+translatorClass givenName (Class {..}) = do --another name, or it will be always Main, for testing purposes
+    pushStr $ ".class public jsmClasses/" ++ givenName
+    pushStr ".super java/lang/Object"
+    let execAbleFuns = filter (\(Fun {..}) -> name /= "Any") methods
+    helper execAbleFuns where
+        helper :: [Fun] -> SuperState ()
+        helper [] = return ()
+        helper [f] = translatorMethod f 
+        helper (f:fs) = do
+            translatorMethod f
+            helper fs    
 {-
 type ConstantPool = [Constant]
 
@@ -325,27 +355,7 @@ translatorClass' thisClass@(Class {..}) = do
     let thisJVMClass = runReader (evalStateT (translatorClass thisClass) []) ""
     return $ thisJVMClass : innerJVMClasses
 
-translatorClass :: Class -> StateT ConstantPool (Reader String) JVMClass
-translatorClass (Class {..}) = do
-    pool <- get
-    return JVMClass {
-            constantPool = pool,
-            thisClass = undefined,
-            superClass = undefined,
-            flags = [],
-            interfaces = [],
-            fields = undefined,
-            methods = undefined,
-            attributes = undefined
-        }
-
 -} 
-translateHelloWorld :: String -> IO()
-translateHelloWorld name = do 
-    helloWorldj <- readFile "test/hello_world.j"
-    writeFile (name ++ ".j") helloWorldj
-    return ()
+    
 
-{-runTranslateExpression :: Expr -> TableLocalVariables -> [String]
-runTranslateExpression expr table = reverse $ execState (evalStateT (translatorExpression expr) table) []-}
 
