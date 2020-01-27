@@ -27,14 +27,20 @@ genUnqID prefix lineNum = prefix ++ show lineNum
 pushStr :: String -> SuperState ()
 pushStr newStr = lift $ lift $ modify ((newStr ++ "\n"): )
 
-updateVariable :: String -> (LocalVariable -> LocalVariable) -> SuperState ()
-updateVariable nameVar funUpdating = modify (helper) where
+updateLocal :: String -> (LocalVariable -> LocalVariable) -> SuperState ()
+updateLocal nameVar funUpdating = modify (helper) where
     helper [] = []
     helper (var@(name, _, _, _) : vars) | name == nameVar = (funUpdating var) : vars
     helper (var : vars) = var : (helper vars)
 
 pushLocal :: (String, KType, Int, Bool) -> SuperState ()
 pushLocal newL = modify (newL : )
+
+deleteLocalByIndex :: Int -> SuperState ()
+deleteLocalByIndex indexVar = modify (helper) where
+    helper [] = []
+    helper (var@(_, _, index, _) : vars) | index == indexVar = vars
+    helper (var : vars) = var : (helper vars)
 
 translatorBinOp :: Expr -> Expr -> String -> SuperState KType
 translatorBinOp e1 e2 postfix = do
@@ -89,7 +95,7 @@ translatorExpression =
                         KTDouble -> "dload " ++ show index
                         _ -> "aload " ++ show index
                     return ktype
-                Nothing -> throwError $ "Variable " ++ varName ++ " not found"
+                Nothing -> throwError $ "Variable " ++ varName ++ " not found #1"
         CallFun ".get" (variable : fields) -> do --TODO FIX!
             ktype <- case variable of 
                 (Var varName) -> do        
@@ -99,25 +105,27 @@ translatorExpression =
                             case ktype of
                                 KTUserType nameUserType -> pushStr $ "aload " ++ show index
                                 KTArray ktypeArrayElem -> pushStr $ "aload " ++ show index
-                                _ -> throwError "Unsupported type"
+                                _ -> throwError $ "Unsupported type"
                             return ktype
-                        Nothing -> throwError $ "Variable " ++ varName ++ " not found"
+                        Nothing -> throwError $ "Variable " ++ varName ++ " not found #2"
                 _ -> translatorExpression variable        
             case fields of
                 [] -> return ktype 
                 _ -> do
                     translatorGetFields $ init fields
                     case last fields of
-                        Var nameLastField ->
+                        Var nameLastField -> do
                             pushStr $ "getfield " ++ nameLastField
+                            return KTUnknown -- TODO
                         indexInArray -> do
                             translatorExpression indexInArray
-                            pushStr $ case getKTypeFromFields ktype fields of
+                            let ktypeRes = getKTypeFromFields ktype fields
+                            pushStr $ case ktypeRes of
                                 KTInt -> "iaload"
                                 KTLong -> "laload"
                                 KTDouble -> "daload"
                                 _ -> "aaload"
-                    return ktype             
+                            return ktypeRes  
         Add e1 e2 -> translatorBinOp e1 e2 "add"  
         Sub e1 e2 -> translatorBinOp e1 e2 "sub"
         Mul e1 e2 -> translatorBinOp e1 e2 "mul"
@@ -134,7 +142,7 @@ translatorExpression =
                             KTLong -> "lstore " ++ show index
                             KTDouble -> "dstore " ++ show index
                             _ -> "astore " ++ show index
-                        updateVariable name (\(name', _, index', canModify') -> (name', ktypeRes, index', canModify'))
+                        updateLocal name (\(name', _, index', canModify') -> (name', ktypeRes, index', canModify'))
                         return KTUnit
                     | canModify == False -> throwError $ "Cannot modify " ++ name
                     | otherwise -> do 
@@ -144,14 +152,13 @@ translatorExpression =
                             KTLong -> "lstore " ++ show index
                             KTDouble -> "dstore " ++ show index
                             _ -> "astore " ++ show index
-                        updateVariable name (\(name', _, index', canModify') -> (name', ktype, index', canModify'))
+                        updateLocal name (\(name', _, index', canModify') -> (name', ktype, index', canModify'))
                         return KTUnit        
-                _ -> throwError $ "Variable " ++ varName ++ " not found"
+                _ -> throwError $ "Variable " ++ varName ++ " not found #"
         CallFun ".set" (rvalue : (Var varName) : fields) -> do
             tableLocalVariables <- get
             case find ((== varName) . sel1) tableLocalVariables of
-                Just (name, ktype, index, canModify)
-                    | canModify == True || ktype == KTUnknown -> do
+                Just (name, ktype, index, canModify) -> do
                         case ktype of
                             KTUserType nameUserType -> pushStr $ "aload " ++ show index
                             KTArray ktypeArrayElem -> pushStr $ "aload " ++ show index
@@ -169,6 +176,7 @@ translatorExpression =
                                     KTLong -> pushStr $ "lastore"
                                     KTDouble -> pushStr $ "dastore"
                                     KTUserType _ -> pushStr $ "aastore"
+                                    _ -> throwError $ "ktypeRes = " ++ show ktypeRes
                         return KTUnit
                 _ -> throwError $ "Variable " ++ varName ++ " not found"
         If cond thenBranch elseBranch -> do
@@ -195,7 +203,13 @@ translatorExpression =
             pushStr $ "iconst_0"
             pushStr $ "fi" ++ show lengthCurrentLines ++ ":"
             return KTInt
-        CallFun (".toBool") [arg]-> translatorExpression arg--TODO   
+        CallFun ".toBool" [arg] -> translatorExpression arg --TODO
+        CallFun ".array" [Val (KDInt lengthArray), Lambda [Variable _ varName _] body] -> do
+            lengthTableLocalVariables <- lift $ gets length
+            pushLocal (varName, KTInt, lengthTableLocalVariables, True)
+            ktype <- createNewArray lengthArray 0 lengthTableLocalVariables body
+            deleteLocalByIndex lengthTableLocalVariables
+            return ktype
         CallFun ('.' : nameFun) argsFun -> throwError nameFun -- TODO
         CallFun "println" [message] -> do
             pushStr "getstatic java/lang/System/out Ljava/io/PrintStream;"
@@ -214,6 +228,36 @@ translatorExpression =
                     return returnType
                 Nothing -> throwError $ "Fun " ++ nameFun ++ " not found"
         _ -> throwError "Unsupported operator"        
+
+createNewArray :: Integer -> Integer -> Int -> [FunPrimitive] -> SuperState KType
+createNewArray length index indexArgLambda body
+    | length == index = return KTUnknown
+    | 0 == index = do
+        pushStr $ "iconst_0"
+        pushStr $ "istore " ++ show indexArgLambda
+        ktype <- manyTranslatorFunPrimitive body
+        case ktype of
+            KTInt -> do
+                pushStr $ "istore " ++ show indexArgLambda
+                pushStr $ "ldc " ++ show length
+                pushStr $ "newarray int"
+                pushStr $ "dup"
+                pushStr $ "iconst_0"
+                pushStr $ "iload " ++ show indexArgLambda
+                pushStr $ "iastore"
+            _ -> undefined -- TODO
+        createNewArray length (index + 1) indexArgLambda body
+        return $ KTArray ktype
+    | otherwise = do
+        pushStr $ "dup"
+        pushStr $ "ldc " ++ show index
+        pushStr $ "dup"
+        pushStr $ "istore " ++ show indexArgLambda
+        ktype <- manyTranslatorFunPrimitive body
+        case ktype of
+            KTInt -> pushStr $ "iastore"
+            _ -> undefined -- TODO
+        createNewArray length (index + 1) indexArgLambda body
 
 getKTypeFromFields :: KType -> [Expr] -> KType
 getKTypeFromFields ktype [] = ktype
@@ -288,6 +332,7 @@ localStoreArgs [] = return ()
 localStoreArgs ((Variable {..}):args) = do 
         lengthTableLocalVariables <- gets length
         pushLocal (varName, varType, lengthTableLocalVariables, varMutable)
+        localStoreArgs args
 
 translatorMethod :: Fun -> SuperState ()
 translatorMethod (Fun {..})= do
@@ -302,6 +347,7 @@ translatorMethod (Fun {..})= do
         KTDouble -> pushStr "dreturn"
         KTUnit -> pushStr "return"
         _ -> pushStr "areturn"
+    put [] -- delete local args
     pushStr $ ".end method"
 
 --TODO:Add fields, nested Classes
@@ -356,6 +402,3 @@ translatorClass' thisClass@(Class {..}) = do
     return $ thisJVMClass : innerJVMClasses
 
 -} 
-    
-
-
