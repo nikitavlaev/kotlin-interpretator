@@ -21,11 +21,11 @@ main :: IO ()
 main = do
     args <- getArgs
     case args of
-        ("t":folder:name:other) -> do
+        ("t":folder:name:programName:other) -> do
             {-translateHelloWorld name
             putStrLn $ "Translator finished " ++ name-}
             -- program <- readFile "test/test_translator.kt"
-            program <- readFile "test/test_program.kt"
+            program <- readFile (folder ++ "/" ++ programName)
             putStrLn $ removeComments program 0
             ast <- return $ parse parseProgram "" $ removeComments program 0
             pPrint ast 
@@ -52,6 +52,6 @@ changeMainFunDescriptor :: Class -> Class
 changeMainFunDescriptor (Class {..}) = Class name fields (helper methods) classes where
         helper :: [Fun] -> [Fun]
         helper [] = []
-        helper (fun@(Fun {..}) : funs)
-            | name == "Main" = (Fun "Main" [Variable False "args" (KTArray $ KTArray KTChar)] KTUnit body) : funs
+        helper (fun@(Fun fname _ _ fbody) : funs)
+            | fname == "Main" = (Fun "Main" [Variable False "args" (KTArray $ KTArray KTChar)] KTUnit fbody) : funs
             | otherwise = fun : (helper funs) 
