@@ -9,95 +9,95 @@ ldc_w 3.14
 dastore
 return
 .end method
-.method public static main()V
+.method public static main([Ljava/lang/String;)V
 .limit stack 1024
 .limit locals 1024
 iconst_0
-istore 1
-iload 1
+istore 2
+iload 2
 ldc 2
 iadd
-istore 1
+istore 2
 ldc 10
 newarray int
 dup
 iconst_0
-iload 1
+iload 2
 iastore
 dup
 ldc 1
 dup
-istore 1
-iload 1
+istore 2
+iload 2
 ldc 2
 iadd
 iastore
 dup
 ldc 2
 dup
-istore 1
-iload 1
+istore 2
+iload 2
 ldc 2
 iadd
 iastore
 dup
 ldc 3
 dup
-istore 1
-iload 1
+istore 2
+iload 2
 ldc 2
 iadd
 iastore
 dup
 ldc 4
 dup
-istore 1
-iload 1
+istore 2
+iload 2
 ldc 2
 iadd
 iastore
 dup
 ldc 5
 dup
-istore 1
-iload 1
+istore 2
+iload 2
 ldc 2
 iadd
 iastore
 dup
 ldc 6
 dup
-istore 1
-iload 1
+istore 2
+iload 2
 ldc 2
 iadd
 iastore
 dup
 ldc 7
 dup
-istore 1
-iload 1
+istore 2
+iload 2
 ldc 2
 iadd
 iastore
 dup
 ldc 8
 dup
-istore 1
-iload 1
+istore 2
+iload 2
 ldc 2
 iadd
 iastore
 dup
 ldc 9
 dup
-istore 1
-iload 1
+istore 2
+iload 2
 ldc 2
 iadd
 iastore
-astore 0
-aload 0
+astore 1
+aload 1
 ldc 1
 iaload
 ldc 3
@@ -114,7 +114,7 @@ invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
 goto fi109
 else109:
 fi109:
-aload 0
+aload 1
 invokestatic jsmClasses/Main/f([Ljava/lang/Object;)V
 getstatic java/lang/System/out Ljava/io/PrintStream;
 ldc "..."
