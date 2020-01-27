@@ -95,7 +95,7 @@ translatorExpression =
                         KTDouble -> "dload " ++ show index
                         _ -> "aload " ++ show index
                     return ktype
-                Nothing -> throwError $ "Variable " ++ varName ++ " not found #1"
+                Nothing -> throwError $ "Variable " ++ varName ++ " not found "
         CallFun ".get" (variable : fields) -> do --TODO FIX!
             ktype <- case variable of 
                 (Var varName) -> do        
@@ -107,7 +107,7 @@ translatorExpression =
                                 KTArray ktypeArrayElem -> pushStr $ "aload " ++ show index
                                 _ -> throwError $ "Unsupported type"
                             return ktype
-                        Nothing -> throwError $ "Variable " ++ varName ++ " not found #2"
+                        Nothing -> throwError $ "Variable " ++ varName ++ " not found"
                 _ -> translatorExpression variable        
             case fields of
                 [] -> return ktype 
@@ -152,9 +152,9 @@ translatorExpression =
                             KTLong -> "lstore " ++ show index
                             KTDouble -> "dstore " ++ show index
                             _ -> "astore " ++ show index
-                        updateLocal name (\(name', _, index', canModify') -> (name', ktype, index', canModify'))
+                        updateLocal name (\(name', _, index', canModify') -> (name', ktypeRes, index', canModify'))
                         return KTUnit        
-                _ -> throwError $ "Variable " ++ varName ++ " not found #"
+                _ -> throwError $ "Variable " ++ varName ++ " not found"
         CallFun ".set" (rvalue : (Var varName) : fields) -> do
             tableLocalVariables <- get
             case find ((== varName) . sel1) tableLocalVariables of

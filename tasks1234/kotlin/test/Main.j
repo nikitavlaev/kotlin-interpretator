@@ -98,6 +98,23 @@ iadd
 iastore
 astore 0
 aload 0
+ldc 1
+iaload
+ldc 3
+if_icmpne else99
+iconst_1
+goto fi99
+else99:
+iconst_0
+fi99:
+ifeq else109
+getstatic java/lang/System/out Ljava/io/PrintStream;
+ldc "!!!"
+invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+goto fi109
+else109:
+fi109:
+aload 0
 invokestatic jsmClasses/Main/f([Ljava/lang/Object;)V
 getstatic java/lang/System/out Ljava/io/PrintStream;
 ldc "..."

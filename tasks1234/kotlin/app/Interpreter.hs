@@ -1,6 +1,7 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE BlockArguments #-}
 {-# OPTIONS_GHC -fwarn-incomplete-patterns -fwarn-incomplete-uni-patterns #-}
 
 module Interpreter where
@@ -9,6 +10,9 @@ import Text.Pretty.Simple (pPrint)
 import Data.List
 import Data.List.Split
 import Debug.Trace
+import Control.Monad.Reader
+import Control.Monad.State.Lazy
+import Control.Monad.Except
 
 data Log a = Log String a
 
@@ -28,7 +32,18 @@ instance Eq InterObject where --wrong comparison, but enough to fulfill its purp
     InterBlock == InterBlock = True
     InterMainClass _ == InterMainClass _ = True
     _ == _ = False
-    
+
+type InterState = ExceptT String (StateT [InterObject]  (ReaderT Class IO))
+
+pushToStack :: InterObject -> InterState () 
+pushToStack obj = lift $ modify (obj:)
+
+pushListToStack :: [InterObject] -> InterState ()
+pushListToStack [] = return ()
+pushListToStack (obj:objs) = do
+                pushListToStack objs
+                pushToStack obj
+
 dataConversionFromTypeToType :: KData -> KType -> KType -> KData
 dataConversionFromTypeToType (KDError m) _ _ = KDError m
 dataConversionFromTypeToType (KDInt x) _ KTByte = KDInt $ mod (x + 2 ^ 7) (2 ^ 8) - 2 ^ 7
@@ -77,21 +92,18 @@ setupProgramStack :: Class -> [InterObject]
 setupProgramStack program = ((\(Variable {..}) -> InterVar varName varType KDUndefined varMutable Nothing) <$> fields program) ++ --add all fields as variables to stack
                             [(InterMainClass program)]
 interpretProgram :: Class -> IO ()
-interpretProgram program =
-    interpretFunByName program
-                        (setupProgramStack program)
-                        "Main" 
-                        [] 
-    >>= (\(kdata, ktype, stack) -> case (kdata, ktype) of
-    (KDError m, _) -> do
-        putStrLn $ "\n\nError: " ++ m
-        return ()
-    (KDUnit, KTUnit) -> do
-        putStrLn $ "\n\nProgram ended successfully"
-        return ()
-    _ -> do
-        putStrLn $ "\n\nError: Function Main returned " ++ show kdata ++ " of type " ++ show ktype ++ ", but was expected unit"
-        return ())
+interpretProgram program = do
+        result <- runReaderT (evalStateT (runExceptT (interpretFunByName program "Main" [])) (setupProgramStack program)) program
+        case result of 
+            (Left m) -> do
+                putStrLn m
+                return ()
+            (Right (KDUnit, KTUnit)) -> do     
+                putStrLn $ "\n\nProgram ended successfully"
+                return ()   
+            (Right (kdata, ktype)) -> do    
+                putStrLn $ "\n\nError: Function Main returned " ++ show kdata ++ " of type " ++ show ktype ++ ", but was expected unit"
+                return ()
 
 checkArgsTypes :: [Variable] -> [KData] -> [KType] -> Either String ([KData],[KType])
 checkArgsTypes [] [] [] = Right ([], [])
@@ -102,11 +114,11 @@ checkArgsTypes ((Variable {..}) : prevArgs) (kdata : prevKdatas) (ktype : prevKt
                 (Right (kdatas', ktypes')) -> (Right (kdata' : kdatas', ktype : ktypes'))
 checkArgsTypes _ _ _ = Left "Internal error in checking types: args length was checked before"
 
-launchFun :: Fun -> [InterObject] -> [Expr] -> IO (KData, KType, [InterObject])
-launchFun (Fun {..}) stack arguments = do 
-        (kdatas, ktypes, stack') <- interpretFunArgs stack arguments
+launchFun :: Fun -> [Expr] -> InterState (KData, KType)
+launchFun (Fun {..}) arguments = do 
+        (kdatas, ktypes) <- interpretFunArgs arguments
         case checkArgsTypes args kdatas ktypes of
-            (Left m) -> return (KDError $ "Arguments type mismatched in function " ++ name, KTUnknown, stack)
+            (Left m) -> throwError $ "Arguments type mismatched in function " ++ name
             (Right (kdatas',ktypes')) -> do
                 let argNames = varName <$> args
                 let argMutables = varMutable <$> args
@@ -118,308 +130,288 @@ launchFun (Fun {..}) stack arguments = do
                     zip5 _ _ _ _ _ = [] -- here lists are of equal length, so in case of such internal error we drop everything else
                 --pPrint $ Log "Name started function" name
                 --pPrint $ Log "Stack before working function" $ init stack'
-                (kdataResult, ktypeResult, stack'') <- interpretBlock (argsToStackFormat ++ [InterFun] ++ stack') body
+                pushToStack InterFun
+                pushListToStack argsToStackFormat
+                (kdataResult, ktypeResult) <- interpretBlock body
                 --pPrint $ Log ("kdataResult in function" ++ name) $ kdataResult
                 --pPrint $ Log ("ktypeResult in function" ++ name) $ ktypeResult
-                let stack''' = delete InterFun stack''
+                lift $ modify $ delete InterFun
                 --pPrint $ Log "Name ended function" name
                 --pPrint $ Log "Stack after working function" $ init stack'''
-                return $ case dataConversionFromTypeToType kdataResult ktypeResult returnType of
-                    KDError m -> (KDError $ "Typecheck fail in " ++ name ++ 
-                                    " between " ++ show returnType ++ " and " ++ show ktypeResult ++ " " ++ "\n       " 
-                                    ++ m, KTUnknown, stack''')
-                    kdataResult' -> (kdataResult', ktypeResult, stack''')
+                case dataConversionFromTypeToType kdataResult ktypeResult returnType of
+                    KDError m -> throwError $ "Typecheck fail in " ++ name ++ 
+                                    " between " ++ show returnType ++ " and " ++ show ktypeResult ++ " " ++ "\n       " ++ m
+                    kdataResult' -> return (kdataResult', ktypeResult)
 
-interpretFunByName :: Class -> [InterObject] -> String -> [Expr] -> IO (KData, KType, [InterObject])
-interpretFunByName currentClass stack ('.' : name) (this : args) = do --ClassA.ClassB.f()
-    (kdataThis, ktypeThis, stack') <- interpretExpression stack this
+interpretFunByName :: Class -> String -> [Expr] -> InterState (KData, KType)
+interpretFunByName currentClass ('.' : name) (this : args) = do --ClassA.ClassB.f()
+    (kdataThis, ktypeThis) <- interpretExpression this
     case ktypeThis of
         KTUserType nameUserType -> do
             let subTypes = splitOn "." nameUserType
-            descendInClasses currentClass stack' subTypes name (this : args) where
-                descendInClasses :: Class -> [InterObject] -> [String] -> String -> [Expr] -> IO (KData, KType, [InterObject])
-                descendInClasses currentClass stack subTypes funName args = do
+            descendInClasses currentClass subTypes name (this : args) where
+                descendInClasses :: Class -> [String] -> String -> [Expr] -> InterState (KData, KType)
+                descendInClasses currentClass subTypes funName args = do
                     case subTypes of
-                        [] -> return (KDError $ "Empty name of user type", KTUnknown, stack)
+                        [] -> throwError $ "Empty name of user type"
                         (className:cls) -> do
                             let targetClass = find (\(Class name _ _ _ ) -> name == className) (classes currentClass)
                             case targetClass of
-                                Nothing -> return (KDError $ "No such class " ++ className, KTUnknown, stack)
+                                Nothing -> throwError $  "No such class " ++ className
                                 (Just cl) -> case cls of
-                                    [] -> interpretFunByName cl stack funName args
-                                    _  -> descendInClasses cl stack cls funName args         
-        _ -> return (KDError $ "Cannot override class " ++ show ktypeThis, KTUnknown, stack')
+                                    [] -> interpretFunByName cl funName args
+                                    _  -> descendInClasses cl cls funName args         
+        _ -> throwError $ "Cannot override class " ++ show ktypeThis
 
-interpretFunByName currentClass@(Class clName clFlds (f@(Fun nameFun argsFun typeFun bodyFun) : otherFuns) clCls) stack name args
+interpretFunByName currentClass@(Class clName clFlds (f@(Fun nameFun argsFun typeFun bodyFun) : otherFuns) clCls) name args
     | (nameFun == name) && (length argsFun == length args) = do
-        (kdatas, ktypes, stack') <- launchFun f stack args  
-        case kdatas of --if args types error then continue search
-            (KDError ('A':'r':'g':other)) -> interpretFunByName (Class clName clFlds otherFuns clCls) stack name args
-            _ -> return (kdatas, ktypes, stack')
-    | otherwise = interpretFunByName (Class clName clFlds otherFuns clCls) stack name args
+        stack <- lift $ get 
+        res <- launchFun f args --TODO --if args types error then continue search
+        lift $ put stack 
+        return res 
+    | otherwise = interpretFunByName (Class clName clFlds otherFuns clCls) name args
 
-interpretFunByName (Class _ _ [] _) stack name (arg:args) = return (KDError $ "Function " ++ name ++ " was not found, arg :: " ++ show arg, KTAny, stack)
-interpretFunByName (Class _ _ [] _) stack name _ = return (KDError $ "Function " ++ name ++ " was not found", KTAny, stack)
+interpretFunByName (Class _ _ [] _) name (arg:args) = throwError $ "Function " ++ name ++ " was not found, arg :: " ++ show arg
+interpretFunByName (Class _ _ [] _) name _ = throwError $ "Function " ++ name ++ " was not found"
 
-interpretFunArgs :: [InterObject] -> [Expr] -> IO ([KData], [KType], [InterObject])
-interpretFunArgs stack (arg:args) = do
-    (kdata, ktype, stack') <- interpretExpression stack arg
-    (kdatas, ktypes, stack'') <- interpretFunArgs stack' args
-    return (kdata : kdatas, ktype : ktypes, stack'')
-interpretFunArgs stack [] = return ([], [], stack)
+interpretFunArgs :: [Expr] -> InterState ([KData], [KType])
+interpretFunArgs (arg:args) = do
+    (kdata, ktype) <- interpretExpression arg
+    (kdatas, ktypes) <- interpretFunArgs args
+    return (kdata : kdatas, ktype : ktypes)
+interpretFunArgs [] = return ([], [])
 
-interpretBlock :: [InterObject] -> [FunPrimitive] -> IO (KData, KType, [InterObject])
-interpretBlock stack = interBlock (InterBlock : stack) where
-    deleteBlock (InterBlock : objs) = objs
-    deleteBlock (_ : objs) = deleteBlock objs
-    deleteBlock [] = []
-    interBlock stack [fp] = do
-       -- pPrint $ Log "Stack" $ init stack
-       -- pPrint $ Log "Action" fp
-        (kdata, ktype, stack') <- interpretFunPrimitive stack fp
-       -- pPrint $ Log "Stack" $ init stack'
-        return (kdata, ktype, deleteBlock stack')
-    interBlock stack (fp:fps) = do
-       -- pPrint $ Log "Stack" $ init stack
-       -- pPrint $ Log "Action" fp
-        (kdata, ktype, stack') <- interpretFunPrimitive stack fp
-        case kdata of
-            KDError m -> return (kdata, ktype, deleteBlock stack')
-            _         -> interBlock stack' fps
-    interBlock stack [] = return (KDUnit, KTUnit, deleteBlock stack)
+interpretBlock :: [FunPrimitive] -> InterState (KData, KType)
+interpretBlock fs = do
+    pushToStack InterBlock
+    interBlock fs where
+        interBlock [fp] = do
+        -- pPrint $ Log "Stack" $ init stack
+        -- pPrint $ Log "Action" fp
+            (kdata, ktype) <- interpretFunPrimitive fp
+        -- pPrint $ Log "Stack" $ init stack'
+            lift $ modify $ delete InterBlock
+            return (kdata, ktype)
+        interBlock (fp:fps) = do
+        -- pPrint $ Log "Stack" $ init stack
+        -- pPrint $ Log "Action" fp
+            (kdata, ktype) <- interpretFunPrimitive fp
+            interBlock fps
+        interBlock [] = do
+            lift $ modify $ delete InterBlock
+            return (KDUnit, KTUnit)
 
-interpretFunPrimitive :: [InterObject] -> FunPrimitive -> IO (KData, KType, [InterObject])
-interpretFunPrimitive stack (Expression expr) = interpretExpression stack expr
-interpretFunPrimitive stack (ValInit {..}) =
-    return (KDUndefined, KTUnknown, (InterVar {name = name, ktype = ktype, kdata = KDUndefined, canModify = False, connectedVariable = Nothing}) : stack)
-interpretFunPrimitive stack (VarInit {..}) =
-    return (KDUndefined, KTUnknown, (InterVar {name = name, ktype = ktype, kdata = KDUndefined, canModify = True, connectedVariable = Nothing}) : stack)
-interpretFunPrimitive stack (While {..}) = do
-    (kdataCond, ktypeCond, stack') <- interpretExpression stack cond
+interpretFunPrimitive :: FunPrimitive -> InterState (KData, KType)
+interpretFunPrimitive (Expression expr) = interpretExpression expr
+interpretFunPrimitive (ValInit {..}) = do
+    pushToStack $ InterVar {name = name, ktype = ktype, kdata = KDUndefined, canModify = False, connectedVariable = Nothing}
+    return (KDUndefined, KTUnknown)
+interpretFunPrimitive (VarInit {..}) =do 
+    pushToStack $ InterVar {name = name, ktype = ktype, kdata = KDUndefined, canModify = True, connectedVariable = Nothing}
+    return (KDUndefined, KTUnknown)
+interpretFunPrimitive (While {..}) = do
+    (kdataCond, ktypeCond) <- interpretExpression cond
     case kdataCond of
-        KDError _ -> return (kdataCond, ktypeCond, stack')
         KDBool True -> do
-            (kdataBody, ktypeBody, stack'') <- interpretBlock stack' body
-            case kdataBody of
-                KDError _ -> return (kdataBody, ktypeBody, stack'')
-                _ -> interpretFunPrimitive stack'' (While cond body)
-        KDBool False -> return (KDUndefined, KTUnknown, stack')
-        _ -> return (KDError "Invalid condition in While", KTUnknown, stack) 
-interpretFunPrimitive stack _ = return (KDError "This instruction is unsupported for now", KTUnknown, stack) 
+            (kdataBody, ktypeBody) <- interpretBlock body
+            interpretFunPrimitive (While cond body)
+        KDBool False -> return (KDUndefined, KTUnknown)
+        _ -> throwError "Invalid condition in While" 
+interpretFunPrimitive _ = throwError $ "This instruction is unsupported for now" 
 
-createArrayByLambda :: String -> Integer -> [FunPrimitive] -> [InterObject] -> IO (KData, KType, [InterObject])
-createArrayByLambda indexName size body stack = do
-    (kdata, ktypeElement, stack') <- interpretBlock ([InterVar indexName KTInt (KDInt 0) False Nothing] ++ stack) body
-    let iootherResult = foldr f (return (KDArray [], KTArray KTAny, stack')) [1..(size-1)] where 
-                            f :: Integer -> IO (KData, KType, [InterObject]) -> IO (KData, KType, [InterObject]) 
-                            f i ioans = do 
-                                (kdata, ktype, stack') <- launchFun (Fun "Element" [Variable False indexName KTInt] ktypeElement body) stack [Val (KDInt i)]
-                                ans <- ioans
+createArrayByLambda :: String -> Integer -> [FunPrimitive] -> InterState (KData, KType)
+createArrayByLambda indexName size body = do
+    pushToStack $ InterVar indexName KTInt (KDInt 0) False Nothing
+    (kdata, ktypeElement) <- interpretBlock body
+    let mOtherResult = foldr f (return (KDArray [], KTArray KTAny)) [1..(size-1)] where 
+                            f :: Integer -> InterState (KData, KType) -> InterState (KData, KType)
+                            f i mans = do 
+                                (kdata, ktype) <- launchFun (Fun "Element" [Variable False indexName KTInt] ktypeElement body) [Val (KDInt i)]
+                                ans <- mans
                                 case ans of 
-                                    (KDError m, KTUnknown, stack'') -> return (KDError m, KTUnknown, stack'')
-                                    (KDArray kdatas, KTArray ktypeOther, stack'') -> return (KDArray $ kdata : kdatas, KTArray ktypeElement, stack'')
-                                    _ -> return (KDError "Internal error in creating array by lambda: created smth else but not an array", KTUnknown, stack')
-    otherResult <- iootherResult                                
+                                    (KDArray kdatas, KTArray ktypeOther) -> return (KDArray $ kdata : kdatas, KTArray ktypeElement)
+                                    _ -> throwError $ "Internal error in creating array by lambda: created smth else but not an array"      
+    otherResult <- mOtherResult                                                         
     case otherResult of
-        (KDError m, KTUnknown, stack'') -> return (KDError m, KTUnknown, stack'')
-        (KDArray kdatas, KTArray ktypeOther, stack'') -> return (KDArray $ kdata : kdatas, KTArray ktypeElement, stack'')
-        _ -> return (KDError "Internal error in creating array by lambda: created smth else but not an array", KTUnknown, stack')                                   
+        (KDArray kdatas, KTArray ktypeOther) -> return (KDArray $ kdata : kdatas, KTArray ktypeElement)
+        _ -> throwError $ "Internal error in creating array by lambda: created smth else but not an array"                                       
             
 checkIfInteger :: KType -> Bool 
 checkIfInteger t =  t == KTByte || t == KTShort || t == KTInt || t == KTLong
 
-interpretExpression :: [InterObject] -> Expr -> IO (KData, KType, [InterObject])
-interpretExpression stack (Val kdata) = return (kdata, autoInferenceTypeFromData kdata, stack)
-interpretExpression stack (CallFun {name = "print", args = [exprMessage]}) = do
-    (kdata, ktype, stack') <- interpretExpression stack exprMessage
-    case kdata of
-        KDError m -> return (kdata, ktype, stack')
-        _ -> do
-            putStr $ show kdata
-            return (KDUnit, KTUnit, stack')
-interpretExpression stack (CallFun {name = "println", args = [exprMessage]}) = do
-    (kdata, ktype, stack') <- interpretExpression stack exprMessage
-    case kdata of
-        KDError m -> return (kdata, ktype, stack')
-        _ -> do
-            putStrLn $ show kdata
-            return (KDUnit, KTUnit, stack')
-interpretExpression stack (CallFun {name = "readLine", args = []}) = do
-    inputStr <- getLine
-    return (KDArray $ KDChar <$> inputStr, KTNullable $ KTArray KTChar, stack)
+findStackVarByName :: String -> InterState (Maybe InterObject)
+findStackVarByName vName = lift $ gets $ find (checkVar vName) where 
+                    checkVar vName (InterVar {..}) = name == vName
+                    checkVar _ obj = False 
 
-interpretExpression stack (CallFun "Object" []) = return (KDAny, KTAny, stack)
+interpretExpression:: Expr -> InterState (KData, KType)
+interpretExpression (Val kdata) = return (kdata, autoInferenceTypeFromData kdata)
+interpretExpression (CallFun {name = "print", args = [exprMessage]}) = do
+    (kdata, ktype) <- interpretExpression exprMessage
+    lift $ lift $ lift $ putStr $ show kdata
+    return (KDUnit, KTUnit)
+interpretExpression (CallFun {name = "println", args = [exprMessage]}) = do
+    (kdata, ktype) <- interpretExpression exprMessage
+    lift $ lift $ lift $ putStrLn $ show kdata
+    return (KDUnit, KTUnit)
+interpretExpression (CallFun {name = "readLine", args = []}) = do
+    inputStr <- lift $ lift $ lift $ getLine
+    return (KDArray $ KDChar <$> inputStr, KTNullable $ KTArray KTChar)
 
-interpretExpression stack (CallFun ".array" [Val (KDInt size), (Lambda ((Variable {..}):[]) body) ]) = createArrayByLambda varName size body stack
+interpretExpression (CallFun "Object" []) = return (KDAny, KTAny)
 
-interpretExpression stack (CallFun ".array" _ ) = return (KDError "Illegal initial array arguments", KTUnknown, stack)
+interpretExpression (CallFun ".array" [Val (KDInt size), (Lambda ((Variable {..}):[]) body) ]) = createArrayByLambda varName size body
 
-interpretExpression stack (CallFun ".get" [Var "true"]) = return (KDBool True, KTBool, stack)
-interpretExpression stack (CallFun ".get" [Var "false"]) = return (KDBool False, KTBool, stack)
-interpretExpression stack (CallFun ".get" [Var "null"]) = return (KDNull, KTNullable KTAny, stack)
-interpretExpression stack (CallFun ".get" [Var "unit"]) = return (KDUnit, KTUnit, stack)
-interpretExpression stack (CallFun ".get" (variable : fields)) = do
-    (kdataVar, ktypeVar, stack') <- case variable of
-        Var name -> takeFromStack stack name where
-            takeFromStack :: [InterObject] -> String -> IO (KData, KType, [InterObject])
-            takeFromStack (obj@(InterVar {..}) : objs) nameVar
-                | name == nameVar = return (kdata, ktype, obj : objs)
-                | True = do
-                    (kdataRes, ktypeRes, _) <- takeFromStack objs nameVar
-                    return (kdataRes, ktypeRes, obj : objs)
-            takeFromStack (obj : objs) nameVar = do
-                (kdataRes, ktypeRes, _) <- takeFromStack objs nameVar
-                return (kdataRes, ktypeRes, obj : objs)
-            takeFromStack [] nameVar = return (KDError $ "Variable " ++ nameVar ++ " was not found", KTUnknown, [])
-        _ -> interpretExpression stack variable
-    getFields stack' kdataVar ktypeVar fields where
-        getFields stack kdataVar ktypeVar [] = return (kdataVar, ktypeVar, stack)
-        getFields stack (KDRecord ((nameFieldVar, kdataFieldVar, ktypeFieldVar, canModifyFieldVar) : fieldsVar)) ktypeVar@(KTUserType _) ((Var fieldName) : fields)
-            | nameFieldVar == fieldName = getFields stack kdataFieldVar ktypeFieldVar fields
-            | True = getFields stack (KDRecord fieldsVar) ktypeVar ((Var fieldName) : fields)
-        getFields stack (KDArray kdatas) (KTArray ktype) (field : fields) = do
-            (kdataIndex, ktypeIndex, stack') <- interpretExpression stack field
+interpretExpression (CallFun ".array" _ ) = return (KDError "Illegal initial array arguments", KTUnknown)
+
+interpretExpression (CallFun ".get" [Var "true"]) = return (KDBool True, KTBool)
+interpretExpression (CallFun ".get" [Var "false"]) = return (KDBool False, KTBool)
+interpretExpression (CallFun ".get" [Var "null"]) = return (KDNull, KTNullable KTAny)
+interpretExpression (CallFun ".get" [Var "unit"]) = return (KDUnit, KTUnit)
+interpretExpression (CallFun ".get" (variable : fields)) = do
+    (kdataVar, ktypeVar) <- case variable of
+        (Var vName) -> do
+            result <- findStackVarByName vName
+            case result of
+                Just (InterVar {..}) -> return (kdata,ktype)
+                Nothing -> throwError $ "Variable " ++ vName ++ " was not found"   
+        _ -> interpretExpression variable
+    getFields kdataVar ktypeVar fields where
+        getFields kdataVar ktypeVar [] = return (kdataVar, ktypeVar)
+        getFields (KDRecord ((nameFieldVar, kdataFieldVar, ktypeFieldVar, canModifyFieldVar) : fieldsVar)) ktypeVar@(KTUserType _) ((Var fieldName) : fields)
+            | nameFieldVar == fieldName = getFields kdataFieldVar ktypeFieldVar fields
+            | True = getFields (KDRecord fieldsVar) ktypeVar ((Var fieldName) : fields)
+        getFields (KDArray kdatas) (KTArray ktype) (field : fields) = do
+            (kdataIndex, ktypeIndex) <- interpretExpression field
             case kdataIndex of
-                KDError m -> return (KDError m, KTUnknown, stack')
                 KDInt index 
-                    | (checkIfInteger ktypeIndex == False) -> return (KDError $ "Index of array cannot be of type " ++ show ktypeIndex, KTUnknown, stack')
-                    | (index < 0 || fromInteger index >= length kdatas) -> return (KDError $ "Index " ++ show index ++ " outside the bounds of the array", KTUnknown, stack')
-                    | otherwise -> getFields stack' (kdatas !! fromInteger index) ktype fields
-                _ -> return (KDError $ show kdataIndex ++ " is not index of array", KTUnknown, stack')
-        getFields stack _ ktypeVar ((Var fieldName) : fields) = return (KDError $ "The variable of type " ++ show ktypeVar ++ " does not have the field " ++ fieldName, KTUnknown, stack)
-        getFields stack _ ktypeVar (field : fields) = return (KDError $ "Cannot take an index from the variable of type " ++ show ktypeVar, KTUnknown, stack)
+                    | (checkIfInteger ktypeIndex == False) -> throwError $ "Index of array cannot be of type " ++ show ktypeIndex
+                    | (index < 0 || fromInteger index >= length kdatas) -> throwError $ "Index " ++ show index ++ " outside the bounds of the array"
+                    | otherwise -> getFields (kdatas !! fromInteger index) ktype fields
+                _ -> throwError $ show kdataIndex ++ " is not index of array"
+        getFields _ ktypeVar ((Var fieldName) : fields) = throwError $ "The variable of type " ++ show ktypeVar ++ " does not have the field " ++ fieldName
+        getFields _ ktypeVar (field : fields) = throwError $ "Cannot take an index from the variable of type " ++ show ktypeVar
 
-interpretExpression stack (CallFun ".set" (exprNewVal : (Var varName) : fields)) = do
-    (kdataNewVal, ktypeNewVal, stack') <- interpretExpression stack exprNewVal
-    interSet stack' stack' varName fields kdataNewVal ktypeNewVal where
-        interSet :: [InterObject] -> [InterObject] -> String -> [Expr] -> KData -> KType -> IO (KData, KType, [InterObject])
-        interSet stack (obj@(InterVar {..}) : objs) varName fields kdataNewVal ktypeNewVal
-            | (name == varName) = do
-                --found needed variable
-                (varKData, varKType, stack') <- helperSet stack kdata ktype fields kdataNewVal ktypeNewVal
-                updateStack stack' varName varKData varKType -- where
-            | otherwise = do
-                --continue variable search
-                (kdata', ktype', objs') <- interSet stack objs varName fields kdataNewVal ktypeNewVal
-                return (kdata', ktype', obj : objs') where
-
-                    helperSet :: [InterObject] -> KData -> KType -> [Expr] -> KData -> KType -> IO (KData, KType, [InterObject])
-                    helperSet stack kdataOldVar KTUnknown [] kdataNewVal ktypeNewVal = return (kdataNewVal, ktypeNewVal, stack)
-                    helperSet stack kdataOldVar ktypeOldVar [] kdataNewVal ktypeNewVal =
-                        return $ case dataConversionFromTypeToType kdataNewVal ktypeNewVal ktypeOldVar of
-                            KDError m -> (KDError m, KTUnknown, stack)
-                            kdataRes -> (kdataRes, ktypeOldVar, stack)
-                    helperSet stack (KDRecord ((fieldNameOldVar, fieldKDataOldVar, fieldKTypeOldVar, fieldCanModifyOldVar) : fieldsOldVar))
-                                    (KTUserType nameUserType)
-                                    ((Var fieldName) : fields)
-                                    kdataNewVals
-                                    ktypeNewVal
+interpretExpression (CallFun ".set" (exprNewVal : (Var varName) : fields)) = do
+    (kdataNewVal, ktypeNewVal) <- interpretExpression exprNewVal
+    foundVar <- findStackVarByName varName
+    case foundVar of
+        Nothing -> throwError $ "Variable " ++ varName ++ " was not found"
+        Just (InterVar {..}) -> do
+                (varKData, varKType) <- helperSet kdata ktype fields kdataNewVal ktypeNewVal
+                updateStack varName varKData varKType where
+                    helperSet :: KData -> KType -> [Expr] -> KData -> KType -> InterState (KData, KType)
+                    helperSet kdataOldVar KTUnknown [] kdataNewVal ktypeNewVal = return (kdataNewVal, ktypeNewVal)
+                    helperSet kdataOldVar ktypeOldVar [] kdataNewVal ktypeNewVal =
+                        case dataConversionFromTypeToType kdataNewVal ktypeNewVal ktypeOldVar of
+                            KDError m -> throwError m
+                            kdataRes -> return (kdataRes, ktypeOldVar)
+                    helperSet (KDRecord ((fieldNameOldVar, fieldKDataOldVar, fieldKTypeOldVar, fieldCanModifyOldVar) : fieldsOldVar))
+                            (KTUserType nameUserType)
+                            ((Var fieldName) : fields)
+                            kdataNewVals
+                            ktypeNewVal
                         | (fieldNameOldVar == fieldName) && (fieldCanModifyOldVar == True || fieldKTypeOldVar == KTUnknown || ((length fieldsOldVar) > 0)) = do
-                            (kdataRes, ktypeRes, stack') <- helperSet stack fieldKDataOldVar fieldKTypeOldVar fields kdataNewVal ktypeNewVal
-                            return $ case kdataRes of
-                                KDError _ -> (kdataRes, KTUnknown, stack')
-                                _ -> (KDRecord ((fieldNameOldVar, kdataRes, ktypeRes, fieldCanModifyOldVar) : fieldsOldVar), KTUserType nameUserType, stack')
-                        | (fieldNameOldVar == fieldName) = return (KDError $ "Cannot assign a new value to the val-field " ++ fieldName, KTUnknown, stack)
+                            (kdataRes, ktypeRes) <- helperSet fieldKDataOldVar fieldKTypeOldVar fields kdataNewVal ktypeNewVal
+                            return (KDRecord ((fieldNameOldVar, kdataRes, ktypeRes, fieldCanModifyOldVar) : fieldsOldVar), KTUserType nameUserType)
+                        | (fieldNameOldVar == fieldName) = throwError $ "Cannot assign a new value to the val-field " ++ fieldName
                         | otherwise = do
-                            (kdataRes, ktypeRes, stack') <- helperSet stack (KDRecord fieldsOldVar) (KTUserType nameUserType) ((Var fieldName) : fields) kdataNewVal ktypeNewVal
-                            return $ case kdataRes of
-                                KDError _ -> (kdataRes, KTUnknown, stack')
-                                KDRecord fieldsNewVar -> (KDRecord ((fieldNameOldVar, fieldKDataOldVar, fieldKTypeOldVar, fieldCanModifyOldVar) : fieldsNewVar), KTUserType nameUserType, stack')
-                                _ -> (KDError "Internal error in changing class field: sudden type change", KTUnknown, stack')
-                    helperSet stack (KDRecord []) (KTUserType nameUserType) ((Var fieldName) : fields) kdataNewVal ktypeNewVal =
-                        return (KDError $ "Field " ++ fieldName ++ " in type " ++ nameUserType ++ " was not found", KTUnknown, stack)
-                    helperSet stack _ (KTUserType _) ((Var fieldName) : fields) kdataNewVal ktypeNewVal =
-                        return (KDError $ "Data and type mismatch", KTUnknown, stack)
-                    helperSet stack _ ktypeOldVar ((Var fieldName) : fields) kdataNewVal ktypeNewVal =
-                        return (KDError $ "Type " ++ show ktypeOldVar ++ " has no fields", KTUnknown, stack)
-                    helperSet stack (KDArray kdatasKernelOldVar) (KTArray ktypeKernelOldVar) (exprIndex : fields) kdataNewVal ktypeNewVal = do
-                        (kdataIndex, ktypeIndex, stack') <- interpretExpression stack exprIndex
+                            (kdataRes, ktypeRes) <- helperSet (KDRecord fieldsOldVar) (KTUserType nameUserType) ((Var fieldName) : fields) kdataNewVal ktypeNewVal
+                            case kdataRes of
+                                KDRecord fieldsNewVar -> return (KDRecord ((fieldNameOldVar, fieldKDataOldVar, fieldKTypeOldVar, fieldCanModifyOldVar) : fieldsNewVar), KTUserType nameUserType)
+                                _ -> throwError $ "Internal error in changing class field: sudden type change"
+                    helperSet (KDRecord []) (KTUserType nameUserType) ((Var fieldName) : fields) kdataNewVal ktypeNewVal =
+                        throwError $ "Field " ++ fieldName ++ " in type " ++ nameUserType ++ " was not found"
+                    helperSet _ (KTUserType _) ((Var fieldName) : fields) kdataNewVal ktypeNewVal =
+                        throwError $ "Data and type mismatch"
+                    helperSet _ ktypeOldVar ((Var fieldName) : fields) kdataNewVal ktypeNewVal =
+                        throwError $ "Type " ++ show ktypeOldVar ++ " has no fields"
+                    helperSet (KDArray kdatasKernelOldVar) (KTArray ktypeKernelOldVar) (exprIndex : fields) kdataNewVal ktypeNewVal = do
+                        (kdataIndex, ktypeIndex) <- interpretExpression exprIndex
                         case kdataIndex of
-                            KDError _ -> return (kdataIndex, KTUnknown, stack')
                             KDInt index 
-                                | (checkIfInteger ktypeIndex == False) -> return (KDError $ "Index of array cannot be the value of type " ++ show ktypeIndex, KTUnknown, stack')
-                                | (index < 0 || fromInteger index >= length kdatasKernelOldVar) -> return (KDError $ "Index " ++ show index ++ " outside the bounds of the array", KTUnknown, stack')
+                                | (checkIfInteger ktypeIndex == False) -> throwError $ "Index of array cannot be the value of type " ++ show ktypeIndex
+                                | (index < 0 || fromInteger index >= length kdatasKernelOldVar) -> throwError $ "Index " ++ show index ++ " outside the bounds of the array"
                                 | otherwise -> do
-                                        (kdataNewVar, ktypeNewVar, stack'') <- helperSet stack' (kdatasKernelOldVar !! fromInteger index) ktypeKernelOldVar fields kdataNewVal ktypeNewVal
-                                        case kdataNewVar of
-                                            KDError _ -> return (kdataNewVar, KTUnknown, stack'')
-                                            _ ->
-                                                if ktypeNewVar /= ktypeKernelOldVar then return (KDError $ "Cannot change array element type from " ++ show ktypeKernelOldVar ++ " to " ++ show ktypeNewVar, KTUnknown, stack'')
-                                                else return (KDArray (take (fromInteger index) kdatasKernelOldVar ++ [kdataNewVar] ++ drop (fromInteger index + 1) kdatasKernelOldVar), KTArray ktypeKernelOldVar, stack'')
-                            _ -> return (KDError $ "Data " ++ show kdataIndex ++ " cannot be an index of array", KTUnknown, stack')
-                    helperSet stack _ (KTArray _) (exprIndex : fields) kdataNewVal ktypeNewVal =
-                        return (KDError $ "Data and type mismatch", KTUnknown, stack)
-                    helperSet stack _ ktypeOldVar (exprIndex : fields) kdataNewVal ktypeNewVal =
-                        return (KDError $ "Type " ++ show ktypeOldVar ++ " has no indexes", KTUnknown, stack)
+                                        (kdataNewVar, ktypeNewVar) <- helperSet (kdatasKernelOldVar !! fromInteger index) ktypeKernelOldVar fields kdataNewVal ktypeNewVal
+                                        if ktypeNewVar /= ktypeKernelOldVar then throwError $ "Cannot change array element type from " ++ show ktypeKernelOldVar ++ " to " ++ show ktypeNewVar
+                                        else return (KDArray (take (fromInteger index) kdatasKernelOldVar ++ [kdataNewVar] ++ drop (fromInteger index + 1) kdatasKernelOldVar), KTArray ktypeKernelOldVar)
+                            _ -> throwError $ "Data " ++ show kdataIndex ++ " cannot be an index of array"
+                    helperSet _ (KTArray _) (exprIndex : fields) kdataNewVal ktypeNewVal =
+                        throwError $ "Data and type mismatch"
+                    helperSet _ ktypeOldVar (exprIndex : fields) kdataNewVal ktypeNewVal =
+                        throwError $ "Type " ++ show ktypeOldVar ++ " has no indexes"
 
-                    splitStackByInterFun :: [InterObject] -> ([InterObject], [InterObject])
-                    splitStackByInterFun (InterFun : objs) = ([], objs)
-                    splitStackByInterFun (obj : objs) = (obj : revStackHead, stackTail) where
-                        (revStackHead, stackTail) = splitStackByInterFun objs
-                    splitStackByInterFun [] = ([],[])    
+                    splitStackByObject :: InterObject -> [InterObject] -> ([InterObject], [InterObject])
+                    splitStackByObject pivot (obj : objs) 
+                        | pivot == obj = ([], objs)
+                        | otherwise = do 
+                            let (revStackHead, stackTail) = splitStackByObject pivot objs
+                            (obj:revStackHead, stackTail)
+                    splitStackByObject pivot [] = ([],[])   
 
-                    updateStack :: [InterObject] -> String -> KData -> KType -> IO (KData, KType, [InterObject])
-                    updateStack stack varName varKData varKType = do
-                        let (var, revStackHead, stackTail) = findVarInStack stack varName where
-                            findVarInStack :: [InterObject] -> String -> (Maybe InterObject, [InterObject], [InterObject])
-                            findVarInStack (obj@(InterVar {..}) : objs) varName
-                                | (name == varName) = (Just obj, [], objs)
-                                | otherwise = do
-                                    let (result, stackHead, stackTail) = findVarInStack objs varName
-                                    (result, obj:stackHead, stackTail)
-                            findVarInStack (obj:objs) varName = do
-                                    let (result, stackHead, stackTail) = findVarInStack objs varName
-                                    (result, obj:stackHead, stackTail)
-                            findVarInStack [] _ = (Nothing, [], [])
-                        case var of
-                            (Just (InterVar {..})) -> do
+                    updateStack :: String -> KData -> KType -> InterState (KData, KType)
+                    updateStack varName varKData varKType = do
+                        foundVar <- findStackVarByName varName
+                        case foundVar of
+                            (Just (v@InterVar {..})) -> do
+                                (revStackHead, stackTail) <- lift $ gets $ splitStackByObject v
                                 let stackHead = reverse revStackHead
-                                (KDUndefined, KTUnknown, newStackTail) <- case connectedVariable of
-                                    Nothing -> return (KDUndefined, KTUnknown, stackTail)
-                                    Just (CallFun ".get" ((Var varName') : fields')) -> do
-                                        let (revStackHead', stackTail') = splitStackByInterFun stackTail
-                                        (kdataSet, ktypeSet, newStackTail') <- interSet stackTail' stackTail' varName' (fields' ++ fields) kdataNewVal ktypeNewVal
+                                connected <- case connectedVariable of
+                                    Nothing -> do 
+                                        lift $ put stackTail 
+                                        return (KDUndefined, KTUnknown)
+                                    Just (CallFun ".get" ((Var varName') : fields')) -> do 
+                                        lift $ put stackTail 
+                                        let (revStackHead', stackTail') = splitStackByObject InterFun stackTail
+                                        lift $ put stackTail'
+                                        (kdataSet, ktypeSet) <- interpretExpression (CallFun ".set" (exprNewVal: (Var varName') : (fields' ++ fields)))
                                         case kdataSet of
                                             KDUndefined -> return ()
-                                            _ -> pPrint $ Log "Error" kdataSet
-                                        return (KDUndefined, KTUnknown, reverse revStackHead' ++ [InterFun] ++ newStackTail')
-                                    _ -> return (KDError $ "Internal error: Invalid connected variable type", KTUnknown, [])      
+                                            _ -> throwError $ "Set failed " ++ show kdataSet
+                                        newStackTail' <- lift $ get
+                                        lift $ put (reverse revStackHead' ++ (InterFun):newStackTail')
+                                        return (KDUndefined, KTUnknown)
+                                    _ ->  throwError $ "Internal error: Invalid connected variable type"
+                                newStackTail <- lift $ get      
                                 case ktype of
-                                    KTUnknown -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name varKType varKData canModify connectedVariable) : newStackTail))
+                                    KTUnknown -> do 
+                                        lift $ put (stackHead ++ (InterVar name varKType varKData canModify connectedVariable) : newStackTail)
+                                        return (KDUndefined, KTUnknown) 
                                     _ -> case dataConversionFromTypeToType varKData varKType ktype of
-                                            KDError m -> return (KDError m, KTUnknown, [])
-                                            kdataRes -> return (KDUndefined, KTUnknown, stackHead ++ ((InterVar name ktype kdataRes canModify connectedVariable) : newStackTail))
-                            _ -> return (KDError $ "Variable " ++ varName ++ " was not found", KTUnknown, [])                
- 
-        --skip all non-variables
-        interSet stack (obj : objs) varName fields kdataNewVal ktypeNewVal = do
-            (kdata', ktype', objs') <- interSet stack objs varName fields kdataNewVal ktypeNewVal
-            return (kdata', ktype', obj : objs')
-
-        interSet stack [] varName fields kdataNewVal ktypeNewVal = return (KDError $ "Variable " ++ varName ++ " was not found", KTUnknown, stack)
-
-interpretExpression stack (CallFun {name = ".toBool", args = [expr]}) = do
-    (kdata, ktype, stack') <- interpretExpression stack expr
+                                            KDError m -> throwError $ "Set type check failed " ++ m
+                                            kdataRes -> do
+                                                lift $ put (stackHead ++ (InterVar name ktype kdataRes canModify connectedVariable) : newStackTail)
+                                                return (KDUndefined, KTUnknown)
+                            _ -> throwError $ "Variable " ++ varName ++ " was not found"
+       
+                    
+interpretExpression (CallFun {name = ".toBool", args = [expr]}) = do
+    (kdata, ktype) <- interpretExpression expr
     let res = dataConversionFromTypeToType kdata ktype KTBool
-    return (res, (case res of
-        KDError _ -> KTUnknown
-        _ -> KTBool), stack')
-interpretExpression stack (CallFun ".unnullify" [expr]) = do
-    (kdata, ktype, stack') <- interpretExpression stack expr
+    case res of 
+        KDError _ -> throwError ".toBool failed"
+        _ -> return (res, KTBool)
+
+interpretExpression (CallFun ".unnullify" [expr]) = do
+    (kdata, ktype) <- interpretExpression expr
     case (kdata, ktype) of
-        (KDError _, _) -> return (kdata, ktype, stack')
-        (KDNull, KTNullable _) -> return (KDError "Still null", KTUnknown, stack')
-        (_, KTNullable ktypeKernel) -> return (kdata, ktypeKernel, stack')
-        (_, _) -> return (kdata, ktype, stack')
-interpretExpression stack (CallFun {name = name, args = fargs}) = case (last stack) of 
-                                                                        (InterMainClass program) -> interpretFunByName program stack name fargs
-                                                                        _ -> return (KDError "Internal error: no program class at the stack bottom", KTUnknown, stack)
+        (KDError _, _) -> return (kdata, ktype)
+        (KDNull, KTNullable _) -> return (KDError "Still null", KTUnknown)
+        (_, KTNullable ktypeKernel) -> return (kdata, ktypeKernel)
+        (_, _) -> return (kdata, ktype)
+interpretExpression (CallFun {name = name, args = fargs}) = do
+    program <- lift $ lift $ ask
+    interpretFunByName program name fargs
                                                                     
-interpretExpression stack (Add e1 e2) = do
-    (kdata1, ktype1, stack') <- interpretExpression stack e1
-    (kdata2, ktype2, stack'') <- interpretExpression stack' e2
+interpretExpression (Add e1 e2) = do
+    (kdata1, ktype1) <- interpretExpression e1
+    (kdata2, ktype2) <- interpretExpression e2
     let (kdataRes, ktypeRes) = interAdd kdata1 ktype1 kdata2 ktype2
-    return (kdataRes, ktypeRes, stack'') where
+    case kdataRes of
+        (KDError _) -> throwError $ "Cannot be added " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2
+        _ -> return (kdataRes, ktypeRes)
+        where
         interAdd (KDInt x) ktype1 (KDInt y) ktype2 = (dataConversionFromTypeToType (KDInt (x + y)) KTInt (max ktype1 ktype2), max ktype1 ktype2)
         interAdd (KDInt x) _ (KDDouble y) KTDouble = (KDDouble ((fromInteger x) + y), KTDouble)
         interAdd (KDInt 0) _ (KDBool False) KTBool = (KDBool False, KTBool)
@@ -437,86 +429,113 @@ interpretExpression stack (Add e1 e2) = do
         interAdd (KDArray xs) (KTArray KTChar) (KDChar y) KTChar = (KDArray $ xs ++ [KDChar y], KTArray KTChar)
         interAdd (KDArray []) (KTArray _) (KDArray ys) (KTArray ktype) = (KDArray ys, KTArray ktype)
         interAdd (KDArray (x : xs)) (KTArray ktype1) (KDArray ys) (KTArray ktype2) = case dataConversionFromTypeToType x ktype1 ktype2 of 
-            KDError m -> (KDError m, KTUnknown)
+            KDError m -> (KDError "", KTUnknown)
             kdata' ->
                 case interAdd (KDArray xs) (KTArray ktype1) (KDArray ys) (KTArray ktype2) of
                     (KDArray kdataRes, KTArray ktypeRes) -> (KDArray (kdata' : kdataRes), KTArray ktypeRes)
-                    _ -> (KDError "Internal error: function interAdd of 2 arrays can return only error or new array", KTUnknown)
-        interAdd kdata1 ktype1 kdata2 ktype2 = (KDError $ "Cannot be added " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2, KTUnknown)
-interpretExpression stack (Sub e1 e2) = do
-    (kdata1, ktype1, stack') <- interpretExpression stack e1
-    (kdata2, ktype2, stack'') <- interpretExpression stack' e2
+                    _ -> (KDError "", KTUnknown)
+        interAdd kdata1 ktype1 kdata2 ktype2 = (KDError "", KTUnknown)
+interpretExpression (Sub e1 e2) = do
+    (kdata1, ktype1) <- interpretExpression e1
+    (kdata2, ktype2) <- interpretExpression e2
     let (kdataRes, ktypeRes) = interSub kdata1 ktype1 kdata2 ktype2
-    return (kdataRes, ktypeRes, stack'') where
+    case kdataRes of
+        (KDError _) -> throwError $ "Cannot be subtracted " ++ show kdata2 ++ " of type " ++ show ktype2 ++ " from " ++ show kdata1 ++ " of type " ++ show ktype1
+        _ -> return (kdataRes, ktypeRes)
+        where
         interSub (KDInt x) ktype1 (KDInt y) ktype2 = (dataConversionFromTypeToType (KDInt (x - y)) KTInt (max ktype1 ktype2), max ktype1 ktype2)
         interSub (KDInt x) _ (KDDouble y) KTDouble = (KDDouble ((fromInteger x) - y), KTDouble)
         interSub (KDDouble x) KTDouble (KDInt y) _ = (KDDouble (x - (fromInteger y)), KTDouble)
         interSub (KDDouble x) KTDouble (KDDouble y) KTDouble = (KDDouble (x - y), KTDouble)
-        interSub kdata1 ktype1 kdata2 ktype2 = (KDError $ "Cannot be subtracted " ++ show kdata2 ++ " of type " ++ show ktype2 ++ " from " ++ show kdata1 ++ " of type " ++ show ktype1, KTUnknown)
-interpretExpression stack (Mul e1 e2) = do
-    (kdata1, ktype1, stack') <- interpretExpression stack e1
-    (kdata2, ktype2, stack'') <- interpretExpression stack' e2
+        interSub kdata1 ktype1 kdata2 ktype2 = (KDError "", KTUnknown)
+interpretExpression (Mul e1 e2) = do
+    (kdata1, ktype1) <- interpretExpression e1
+    (kdata2, ktype2) <- interpretExpression e2
     let (kdataRes, ktypeRes) = interMul kdata1 ktype1 kdata2 ktype2
-    return (kdataRes, ktypeRes, stack'') where
+    case kdataRes of
+        (KDError _) -> throwError $ "Cannot be multiplied " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " by " ++ show kdata2 ++ " of type " ++ show ktype2
+        _ -> return (kdataRes, ktypeRes)
+        where
         interMul (KDInt x) ktype1 (KDInt y) ktype2 = (dataConversionFromTypeToType (KDInt (x * y)) KTInt (max ktype1 ktype2), max ktype1 ktype2)
         interMul (KDInt x) _ (KDDouble y) KTDouble = (KDDouble ((fromInteger x) * y), KTDouble)
         interMul (KDDouble x) KTDouble (KDInt y) _ = (KDDouble (x * (fromInteger y)), KTDouble)
         interMul (KDDouble x) KTDouble (KDDouble y) KTDouble = (KDDouble (x * y), KTDouble)
-        interMul kdata1 ktype1 kdata2 ktype2 = (KDError $ "Cannot be multiplied " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " by " ++ show kdata2 ++ " of type " ++ show ktype2, KTUnknown)
-interpretExpression stack (Div e1 e2) = do
-    (kdata1, ktype1, stack') <- interpretExpression stack e1
-    (kdata2, ktype2, stack'') <- interpretExpression stack' e2
+        interMul kdata1 ktype1 kdata2 ktype2 = (KDError "", KTUnknown)
+interpretExpression (Div e1 e2) = do        
+    (kdata1, ktype1) <- interpretExpression e1
+    (kdata2, ktype2) <- interpretExpression e2
     let (kdataRes, ktypeRes) = interDiv kdata1 ktype1 kdata2 ktype2
-    return (kdataRes, ktypeRes, stack'') where
+    case kdataRes of
+        (KDError _) -> throwError $ "Cannot be divided " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " by " ++ show kdata2 ++ " of type " ++ show ktype2
+        _ -> return (kdataRes, ktypeRes)
+        where
         interDiv (KDInt x) ktype1 (KDInt y) ktype2 = (dataConversionFromTypeToType (KDInt (x `div` y)) KTInt (max ktype1 ktype2), max ktype1 ktype2)
         interDiv (KDInt x) _ (KDDouble y) KTDouble = (KDDouble ((fromInteger x) / y), KTDouble)
         interDiv (KDDouble x) KTDouble (KDInt y) _ = (KDDouble (x / (fromInteger y)), KTDouble)
         interDiv (KDDouble x) KTDouble (KDDouble y) KTDouble = (KDDouble (x / y), KTDouble)
-        interDiv kdata1 ktype1 kdata2 ktype2 = (KDError $ "Cannot be divided " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " by " ++ show kdata2 ++ " of type " ++ show ktype2, KTUnknown)
-interpretExpression stack (Mod e1 e2) = do
-    (kdata1, ktype1, stack') <- interpretExpression stack e1
-    (kdata2, ktype2, stack'') <- interpretExpression stack' e2
+        interDiv kdata1 ktype1 kdata2 ktype2 = (KDError "", KTUnknown)
+interpretExpression (Mod e1 e2) = do
+    (kdata1, ktype1) <- interpretExpression e1
+    (kdata2, ktype2) <- interpretExpression e2
     let (kdataRes, ktypeRes) = interMod kdata1 ktype1 kdata2 ktype2
-    return (kdataRes, ktypeRes, stack'') where
+    case kdataRes of
+        (KDError _) -> throwError $ "Cannot take a module of " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " when dividing by " ++ show kdata2 ++ " of type " ++ show ktype2
+        _ -> return (kdataRes, ktypeRes)
+        where
         interMod (KDInt x) ktype1 (KDInt y) ktype2 = (dataConversionFromTypeToType (KDInt (x `mod` y)) KTInt (max ktype1 ktype2), max ktype1 ktype2)
-        interMod kdata1 ktype1 kdata2 ktype2 = (KDError $ "Cannot take a module of " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " when dividing by " ++ show kdata2 ++ " of type " ++ show ktype2, KTUnknown)
-interpretExpression stack (And e1 e2) = do
-    (kdata1, ktype1, stack') <- interpretExpression stack e1
-    (kdata2, ktype2, stack'') <- interpretExpression stack' e2
+        interMod kdata1 ktype1 kdata2 ktype2 = (KDError "", KTUnknown)
+interpretExpression (And e1 e2) = do
+    (kdata1, ktype1) <- interpretExpression e1
+    (kdata2, ktype2) <- interpretExpression e2
     let (kdataRes, ktypeRes) = interAnd kdata1 ktype1 kdata2 ktype2
-    return (kdataRes, ktypeRes, stack'') where
+    case kdataRes of
+        (KDError _) -> throwError $ "Cannot take the logical and between " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2
+        _ -> return (kdataRes, ktypeRes)
+        where
         interAnd (KDBool True) KTBool (KDBool True) KTBool = (KDBool True, KTBool)
         interAnd (KDBool _) KTBool (KDBool _) KTBool = (KDBool False, KTBool)
-        interAnd kdata1 ktype1 kdata2 ktype2 = (KDError $ "Cannot take the logical and between " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2, KTUnknown)
-interpretExpression stack (Or e1 e2) = do
-    (kdata1, ktype1, stack') <- interpretExpression stack e1
-    (kdata2, ktype2, stack'') <- interpretExpression stack' e2
+        interAnd kdata1 ktype1 kdata2 ktype2 = (KDError "", KTUnknown)
+interpretExpression (Or e1 e2) = do
+    (kdata1, ktype1) <- interpretExpression e1
+    (kdata2, ktype2) <- interpretExpression e2
     let (kdataRes, ktypeRes) = interOr kdata1 ktype1 kdata2 ktype2
-    return (kdataRes, ktypeRes, stack'') where
+    case kdataRes of
+        (KDError _) -> throwError $ "Cannot take the logical or between " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2
+        _ -> return (kdataRes, ktypeRes)
+        where
         interOr (KDBool False) KTBool (KDBool False) KTBool = (KDBool False, KTBool)
         interOr (KDBool _) KTBool (KDBool _) KTBool = (KDBool True, KTBool)
-        interOr kdata1 ktype1 kdata2 ktype2 = (KDError $ "Cannot take the logical or between " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2, KTUnknown)
-interpretExpression stack (Not e) = do
-    (kdata, ktype, stack') <- interpretExpression stack e
+        interOr kdata1 ktype1 kdata2 ktype2 = (KDError "", KTUnknown) 
+interpretExpression (Not e) = do
+    (kdata, ktype) <- interpretExpression e
     let (kdataRes, ktypeRes) = interNot kdata ktype
-    return (kdataRes, ktypeRes, stack') where
+    case kdataRes of
+        (KDError _) -> throwError $ "Cannot take the logical not for" ++ show kdata ++ " of type " ++ show ktype
+        _ -> return (kdataRes, ktypeRes)
+        where
         interNot (KDBool x) KTBool = (KDBool (not x), KTBool)
-        interNot kdata ktype = (KDError $ "Cannot take the logical not for" ++ show kdata ++ " of type " ++ show ktype, KTUnknown)
-interpretExpression stack (Less e1 e2) = do
-    (kdata1, ktype1, stack') <- interpretExpression stack e1
-    (kdata2, ktype2, stack'') <- interpretExpression stack' e2
+        interNot kdata ktype = (KDError "", KTUnknown) 
+interpretExpression (Less e1 e2) = do
+    (kdata1, ktype1) <- interpretExpression e1
+    (kdata2, ktype2) <- interpretExpression e2
     let (kdataRes, ktypeRes) = interLess kdata1 ktype1 kdata2 ktype2
-    return (kdataRes, ktypeRes, stack'') where
+    case kdataRes of
+        (KDError _) -> throwError $ "Cannot be compared " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2
+        _ -> return (kdataRes, ktypeRes)
+        where
         interLess (KDInt x) ktype1 (KDInt y) ktype2 = (KDBool (x < y), KTBool)
         interLess (KDInt x) _ (KDDouble y) KTDouble = (KDBool ((fromInteger x) < y), KTBool)
         interLess (KDDouble x) KTDouble (KDInt y) _ = (KDBool (x < (fromInteger y)), KTBool)
         interLess (KDDouble x) KTDouble (KDDouble y) KTDouble = (KDBool (x < y), KTBool)
-        interLess kdata1 ktype1 kdata2 ktype2 = (KDError $ "Cannot be compared " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2, KTUnknown)
-interpretExpression stack (Equal e1 e2) = do
-    (kdata1, ktype1, stack') <- interpretExpression stack e1
-    (kdata2, ktype2, stack'') <- interpretExpression stack' e2
+        interLess kdata1 ktype1 kdata2 ktype2 = (KDError "", KTUnknown) 
+interpretExpression (Equal e1 e2) = do
+    (kdata1, ktype1) <- interpretExpression e1
+    (kdata2, ktype2) <- interpretExpression e2
     let (kdataRes, ktypeRes) = interEqual kdata1 ktype1 kdata2 ktype2
-    return (kdataRes, ktypeRes, stack'') where
+    case kdataRes of
+        (KDError _) -> throwError $ "Cannot be compared " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2
+        _ -> return (kdataRes, ktypeRes)
+        where
         interEqual (KDInt x) ktype1 (KDInt y) ktype2 = (KDBool (x == y), KTBool)
         interEqual (KDInt x) _ (KDDouble y) KTDouble = (KDBool False, KTBool)
         interEqual (KDDouble x) KTDouble (KDInt y) _ = (KDBool False, KTBool)
@@ -531,14 +550,14 @@ interpretExpression stack (Equal e1 e2) = do
                 (KDError m, KTUnknown) -> (KDError m, KTUnknown)
                 (KDBool False, KTBool) -> (KDBool False, KTBool)
                 (KDBool True, KTBool) -> interEqual (KDArray xs) (KTArray ktype1) (KDArray ys) (KTArray ktype2)
-                _ -> (KDError "Internal error: function interEqual can return only error or boolean value", KTUnknown)
-        interEqual kdata1 ktype1 kdata2 ktype2 = (KDError $ "Cannot be compared " ++ show kdata1 ++ " of type " ++ show ktype1 ++ " and " ++ show kdata2 ++ " of type " ++ show ktype2, KTUnknown)
-interpretExpression stack (If cond thenBranch elseBranch) = do
-    (kdata, ktype, stack') <- interpretExpression stack cond
+                _ -> (KDError "", KTUnknown) 
+        interEqual kdata1 ktype1 kdata2 ktype2 = (KDError "", KTUnknown) 
+interpretExpression (If cond thenBranch elseBranch) = do
+    (kdata, ktype) <- interpretExpression cond
     case kdata of
-        KDError m -> return (kdata, ktype, stack')
-        KDBool True -> interpretBlock stack' thenBranch
-        KDBool False -> interpretBlock stack' elseBranch
-        _ -> return (KDError "Invalid condition in If", KTUnknown, stack) 
-interpretExpression stack (Lambda _ _) = return (KDError "Lambda expression is unsupported for now", KTUnknown, stack)   
-interpretExpression stack (Var _) = return (KDError "Var expression is unsupported for now", KTUnknown, stack) --this is not VarInit, needed for args  
+        KDError m -> return (kdata, ktype)
+        KDBool True -> interpretBlock thenBranch
+        KDBool False -> interpretBlock elseBranch
+        _ -> throwError "Invalid condition in If"
+interpretExpression (Lambda _ _) = throwError "Lambda expression is unsupported for now" 
+interpretExpression (Var _) = throwError "Var expression is unsupported for now" --this is not VarInit, needed for args  
