@@ -3,7 +3,8 @@ read -p "Write 'i' to start interpretator, 't' to start translator: " Input
 Name="Main"
 InFolder="test"
 OutFolder="jsmClasses"
-stack run -- $Input $InFolder $Name 
+ProgramName="test_program.kt"
+stack run -- $Input $InFolder $Name $ProgramName
 if [ "$Input" == "t" ]; then 
 if [ -f "$OutFolder\$Name.class" ] #if exists
 then rm "$OutFolder\$Name.class"
