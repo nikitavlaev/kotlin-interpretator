@@ -5,8 +5,10 @@
 .limit locals 1024
 aload 0
 ldc 0
-ldc_w 3.14
-dastore
+new java/lang/Object
+dup
+invokespecial java/lang/Object."<init>":()V
+aastore
 return
 .end method
 .method public static main([Ljava/lang/String;)V
@@ -14,106 +16,106 @@ return
 .limit locals 1024
 iconst_0
 istore 2
-iload 2
-ldc 2
-iadd
-istore 2
+new java/lang/Object
+dup
+invokespecial java/lang/Object."<init>":()V
+astore 2
 ldc 10
-newarray int
+anewarray java/lang/Object
 dup
 iconst_0
-iload 2
-iastore
+aload 2
+aastore
 dup
 ldc 1
 dup
 istore 2
-iload 2
-ldc 2
-iadd
-iastore
+new java/lang/Object
+dup
+invokespecial java/lang/Object."<init>":()V
+aastore
 dup
 ldc 2
 dup
 istore 2
-iload 2
-ldc 2
-iadd
-iastore
+new java/lang/Object
+dup
+invokespecial java/lang/Object."<init>":()V
+aastore
 dup
 ldc 3
 dup
 istore 2
-iload 2
-ldc 2
-iadd
-iastore
+new java/lang/Object
+dup
+invokespecial java/lang/Object."<init>":()V
+aastore
 dup
 ldc 4
 dup
 istore 2
-iload 2
-ldc 2
-iadd
-iastore
+new java/lang/Object
+dup
+invokespecial java/lang/Object."<init>":()V
+aastore
 dup
 ldc 5
 dup
 istore 2
-iload 2
-ldc 2
-iadd
-iastore
+new java/lang/Object
+dup
+invokespecial java/lang/Object."<init>":()V
+aastore
 dup
 ldc 6
 dup
 istore 2
-iload 2
-ldc 2
-iadd
-iastore
+new java/lang/Object
+dup
+invokespecial java/lang/Object."<init>":()V
+aastore
 dup
 ldc 7
 dup
 istore 2
-iload 2
-ldc 2
-iadd
-iastore
+new java/lang/Object
+dup
+invokespecial java/lang/Object."<init>":()V
+aastore
 dup
 ldc 8
 dup
 istore 2
-iload 2
-ldc 2
-iadd
-iastore
+new java/lang/Object
+dup
+invokespecial java/lang/Object."<init>":()V
+aastore
 dup
 ldc 9
 dup
 istore 2
-iload 2
-ldc 2
-iadd
-iastore
+new java/lang/Object
+dup
+invokespecial java/lang/Object."<init>":()V
+aastore
 astore 1
 aload 1
 ldc 1
-iaload
+aaload
 ldc 3
-if_icmpne else99
+if_acmpne else101
 iconst_1
-goto fi99
-else99:
+goto fi101
+else101:
 iconst_0
-fi99:
-ifeq else109
+fi101:
+ifeq else111
 getstatic java/lang/System/out Ljava/io/PrintStream;
 ldc "!!!"
 invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
-goto fi109
-else109:
-fi109:
+goto fi111
+else111:
+fi111:
 aload 1
 invokestatic jsmClasses/Main/f([Ljava/lang/Object;)V
 getstatic java/lang/System/out Ljava/io/PrintStream;

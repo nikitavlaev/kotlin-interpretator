@@ -175,8 +175,7 @@ translatorExpression =
                                     KTInt -> pushStr $ "iastore"
                                     KTLong -> pushStr $ "lastore"
                                     KTDouble -> pushStr $ "dastore"
-                                    KTUserType _ -> pushStr $ "aastore"
-                                    _ -> throwError $ "ktypeRes = " ++ show ktypeRes
+                                    _ -> pushStr $ "aastore"
                         return KTUnit
                 _ -> throwError $ "Variable " ++ varName ++ " not found"
         If cond thenBranch elseBranch -> do
@@ -218,7 +217,12 @@ translatorExpression =
                 (KTArray KTChar) -> do 
                     pushStr "invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V"
                     return KTUnit
-                _ -> throwError "Wrong println argument"    
+                _ -> throwError "Wrong println argument" 
+        CallFun "Object" [] -> do
+            pushStr $ "new java/lang/Object"
+            pushStr $ "dup"
+            pushStr $ "invokespecial java/lang/Object.\"<init>\":()V"
+            return KTAny
         CallFun nameFun args -> do
             translatorFunArgs args
             mainClass <- lift $ lift $ ask
@@ -245,6 +249,14 @@ createNewArray length index indexArgLambda body
                 pushStr $ "iconst_0"
                 pushStr $ "iload " ++ show indexArgLambda
                 pushStr $ "iastore"
+            KTAny -> do
+                pushStr $ "astore " ++ show indexArgLambda
+                pushStr $ "ldc " ++ show length
+                pushStr $ "anewarray java/lang/Object"
+                pushStr $ "dup"
+                pushStr $ "iconst_0"
+                pushStr $ "aload " ++ show indexArgLambda
+                pushStr $ "aastore"
             _ -> undefined -- TODO
         createNewArray length (index + 1) indexArgLambda body
         return $ KTArray ktype
@@ -256,6 +268,7 @@ createNewArray length index indexArgLambda body
         ktype <- manyTranslatorFunPrimitive body
         case ktype of
             KTInt -> pushStr $ "iastore"
+            KTAny -> pushStr $ "aastore"
             _ -> undefined -- TODO
         createNewArray length (index + 1) indexArgLambda body
 

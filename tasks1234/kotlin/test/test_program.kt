@@ -1,9 +1,9 @@
 fun f(arr:Array<Any>) {
-    arr[0] = 3.14;
+    arr[0] = Object();
 }
 
 fun Main() {
-    var a = Array(10) {i -> i + 2}
+    var a = Array(10) {i -> Object()}
     if (a[1] == 3)
         println("!!!")
     f(a)
