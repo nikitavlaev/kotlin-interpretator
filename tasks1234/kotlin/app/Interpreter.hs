@@ -107,11 +107,11 @@ interpretProgram program = do
 
 checkArgsTypes :: [Variable] -> [KData] -> [KType] -> Either String ([KData],[KType])
 checkArgsTypes [] [] [] = Right ([], [])
-checkArgsTypes ((Variable {..}) : prevArgs) (kdata : prevKdatas) (ktype : prevKtypes) = case dataConversionFromTypeToType kdata ktype varType of
-    KDError m -> Left m 
-    kdata' -> case checkArgsTypes prevArgs prevKdatas prevKtypes of
+checkArgsTypes ((Variable {..}) : prevArgs) (kdata : prevKdatas) (ktype : prevKtypes) = case (ktype == varType) of
+    False -> Left "" 
+    True -> case checkArgsTypes prevArgs prevKdatas prevKtypes of
                 (Left m) -> (Left m)
-                (Right (kdatas', ktypes')) -> (Right (kdata' : kdatas', ktype : ktypes'))
+                (Right (kdatas', ktypes')) -> (Right (kdata : kdatas', ktype : ktypes'))
 checkArgsTypes _ _ _ = Left "Internal error in checking types: args length was checked before"
 
 launchFun :: Fun -> [Expr] -> InterState (KData, KType)
@@ -274,6 +274,7 @@ interpretExpression (CallFun ".get" (variable : fields)) = do
             result <- findStackVarByName vName
             case result of
                 Just (InterVar {..}) -> return (kdata,ktype)
+                Just _ -> throwError "Wrong typed variable found"
                 Nothing -> throwError $ "Variable " ++ vName ++ " was not found"   
         _ -> interpretExpression variable
     getFields kdataVar ktypeVar fields where
@@ -384,6 +385,7 @@ interpretExpression (CallFun ".set" (exprNewVal : (Var varName) : fields)) = do
                                                 lift $ put (stackHead ++ (InterVar name ktype kdataRes canModify connectedVariable) : newStackTail)
                                                 return (KDUndefined, KTUnknown)
                             _ -> throwError $ "Variable " ++ varName ++ " was not found"
+        Just _ -> throwError "Wrong typed variable found"                    
        
                     
 interpretExpression (CallFun {name = ".toBool", args = [expr]}) = do

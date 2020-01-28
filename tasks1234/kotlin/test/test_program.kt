@@ -1,12 +1,9 @@
 fun f(arr:Array<Any>) {
-    arr[0] = Object();
+    arr[0] = "asdf";
 }
 
 fun Main() {
-    var a = Array(10) {i -> Object()}
-    if (a[1] == 3)
-        println("!!!")
+    var a = Array(10) {i -> i + 2 }
     f(a)
-    println("...")
 }
 

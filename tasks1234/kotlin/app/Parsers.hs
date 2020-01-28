@@ -90,7 +90,7 @@ parseLambda = do
     separator
     params <- parseLambdaParams
     separator
-    body <- concat <$> (separator *> customSepBy parseFunPrimitive semicolon <* (semicolon <|> separator))
+    body <- concat <$> (customSepBy parseFunPrimitive separator)
     separator
     char '}' 
     return $ Lambda params body

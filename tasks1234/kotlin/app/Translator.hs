@@ -220,8 +220,8 @@ translatorExpression =
                 _ -> throwError "Wrong println argument" 
         CallFun "Object" [] -> do
             pushStr $ "new java/lang/Object"
-            pushStr $ "dup"
-            pushStr $ "invokespecial java/lang/Object.\"<init>\":()V"
+            --pushStr $ "dup"
+            --pushStr $ "invokespecial java/lang/Object/()V"
             return KTAny
         CallFun nameFun args -> do
             translatorFunArgs args
