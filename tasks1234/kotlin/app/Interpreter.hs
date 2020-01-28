@@ -141,7 +141,7 @@ launchFun (Fun {..}) arguments = do
                 case dataConversionFromTypeToType kdataResult ktypeResult returnType of
                     KDError m -> throwError $ "Typecheck fail in " ++ name ++ 
                                     " between " ++ show returnType ++ " and " ++ show ktypeResult ++ " " ++ "\n       " ++ m
-                    kdataResult' -> return (kdataResult', ktypeResult)
+                    kdataResult' -> return (kdataResult', returnType)
 
 interpretFunByName :: Class -> String -> [Expr] -> InterState (KData, KType)
 interpretFunByName currentClass ('.' : name) (this : args) = do --ClassA.ClassB.f()
@@ -372,7 +372,7 @@ interpretExpression (CallFun ".set" (exprNewVal : (Var varName) : fields)) = do
                                             _ -> throwError $ "Set failed " ++ show kdataSet
                                         newStackTail' <- lift $ get
                                         lift $ put (reverse revStackHead' ++ (InterFun):newStackTail')
-                                        return (KDUndefined, KTUnknown)
+                                        return (KDUnit, KTUnit)
                                     _ ->  throwError $ "Internal error: Invalid connected variable type"
                                 newStackTail <- lift $ get      
                                 case ktype of
@@ -383,7 +383,7 @@ interpretExpression (CallFun ".set" (exprNewVal : (Var varName) : fields)) = do
                                             KDError m -> throwError $ "Set type check failed " ++ m
                                             kdataRes -> do
                                                 lift $ put (stackHead ++ (InterVar name ktype kdataRes canModify connectedVariable) : newStackTail)
-                                                return (KDUndefined, KTUnknown)
+                                                return (KDUnit, KTUnit)
                             _ -> throwError $ "Variable " ++ varName ++ " was not found"
         Just _ -> throwError "Wrong typed variable found"                    
        

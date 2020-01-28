@@ -1,9 +1,10 @@
-fun f(arr:Array<Any>) {
-    arr[0] = "asdf";
+fun f(arr:Array<Int>) {
+    arr[0] = 1
 }
 
 fun Main() {
-    var a = Array(10) {i -> i + 2 }
+    var a = Array(10) {i -> 1 }
     f(a)
+    println(a)
 }
 
